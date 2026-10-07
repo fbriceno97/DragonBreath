@@ -93,6 +93,75 @@ or raising the bed, keep electronics-cooling fans running, park the toolhead awa
 from a hot area, or limit its chamber target. Put those printer-specific decisions
 in its start macro or Machine start G-code.
 
+## Making the printer wait for a chamber soak
+
+Start the chamber early with `M141`, then wait for it before the first layer with
+`M191` and a release temperature — start heating toward a target and release the wait
+once the chamber reaches a slightly lower "start printing" temperature. Standard
+`M191`, slicer-driven, and the release margin means it won't stall if the chamber
+settles a degree or two short of target. **Live-validated on a Snapmaker U1 / PAXX.**
+
+### Wait with `M191` + a release temperature
+
+`M191` here is the DragonBreath chamber macro. It takes:
+
+- `S` — the chamber **target** (heat toward this).
+- `R` — the **release** temperature: resume the print once the chamber reaches `R`
+  while it keeps heating toward `S`. Defaults to `S-5` and is clamped so it can never
+  exceed `S`.
+
+> **Where the `R`-aware `M191` comes from.** On the Snapmaker U1/PAXX it's part of the
+> managed chamber-heater config. The `R` (release-temperature) form shown here is in
+> PAXX `develop` and lands in a future PAXX release; **until your PAXX release includes
+> it**, define the macro yourself in a user-owned `.cfg` under
+> `printer_data/config/extended/klipper/` — it overrides the managed `M191` (see the
+> definition in
+> [dragonbreath-klipper](https://github.com/plastikman/dragonbreath-klipper)). **Once a
+> PAXX release ships the updated macro, delete that override from your `user.cfg`** and
+> use the managed `M191`. On other (non-U1) Klipper printers, `M191` comes from
+> dragonbreath-klipper directly.
+
+Which slicer you use decides how you set `R`:
+
+- **OrcaSlicer** exposes a per-filament **"Minimal"** chamber variable
+  (`chamber_minimal_temperature`) built for exactly this — "begin printing once the
+  chamber reaches this, without waiting for the full Target." Pass it as `R`:
+  ```gcode
+  M191 S{overall_chamber_temperature} R{chamber_minimal_temperature[initial_extruder]}
+  ```
+- **SnapmakerOrca** does **not** have that variable (it errors with *"Not a variable
+  name"*), so omit `R` and let the macro default the release to `S-5`:
+  ```gcode
+  M191 S{overall_chamber_temperature}
+  ```
+
+Place it where the stock chamber wait was — after the bed wait (`M190`), before
+`G28 Z` — and **comment out the stock `WAIT_CHAMBER_TEMP` if present** so the print
+doesn't wait twice:
+
+```gcode
+M141 S{overall_chamber_temperature}            ; ADD near the top: start the chamber (no wait)
+; ... stock bed/nozzle/mesh prep ...
+M190 S{bed_temperature_initial_layer_single}   ; stock bed wait
+G0 Z5 F10000                                   ; stock
+M191 S{overall_chamber_temperature}            ; <- wait for the chamber (add R on OrcaSlicer)
+;WAIT_CHAMBER_TEMP TIMEOUT=180                  ; <- COMMENT OUT the stock chamber wait
+G28 Z                                          ; stock (continues to bed mesh, first layer)
+```
+
+Keep `M141 S0` in your Machine **end** G-code so DragonBreath turns off at print end.
+Also re-assert the bed after plate detection (`M140 S{bed_temperature_initial_layer_single}`
+right after `DETECT_BED_PLATE`) — the stock detection sequence zeroes the top `M140`,
+so without this the bed sits cold through warm-up and doesn't help the chamber.
+
+> **Don't confuse this with Orca's *injected* `M191`.** If the **filament preset**'s
+> "Activate temperature control" is on, Orca injects its own blocking `M191` at the very
+> top of the file, before `PRINT_START` — that one fights the sequence (and on the U1
+> was seen to stall filament auto-feed). Uncheck "Activate temperature control" (keep
+> the printer preset's "Support controlling chamber temperature" on so the placeholders
+> still resolve), then slice and confirm the **only** `M191` is the one *you* placed at
+> the wait point. See [The OrcaSlicer trap](#the-orcaslicer-trap).
+
 ## Auxiliary fan, bed, and toolhead position
 
 Heating commands are only part of chamber preheating. The printer's physical
@@ -229,65 +298,70 @@ soak is required.
 
 ## Worked example: Snapmaker U1 / PAXX Orca profile
 
-This is one application of the common “start together, wait later” policy. It is
-not a required DragonBreath sequence. The underscores below are normal G-code
-underscores; do not type backslashes before them.
+This is the concrete, **live-validated** set of edits for the U1 / PAXX Orca profile,
+using the [`M191`](#wait-with-m191--a-release-temperature) wait. The underscores below
+are normal G-code underscores; do not type backslashes before them.
 
-In **Printer settings → Machine G-code → Machine start G-code**, find:
-
-```gcode
-TIMELAPSE_START
-M140 S{bed_temperature_initial_layer_single}
-M104 T{initial_extruder} S140
-```
-
-Insert `M141` immediately after `M140`:
+**Edit 1 — start the chamber early.** In **Printer settings → Machine G-code → Machine
+start G-code**, find the top bed command and add `M141` right after it:
 
 ```gcode
 TIMELAPSE_START
 M140 S{bed_temperature_initial_layer_single}
-M141 S{overall_chamber_temperature} ; start chamber, do not wait
+M141 S{overall_chamber_temperature} ; ADD: start chamber, do not wait
 M104 T{initial_extruder} S140
 ```
 
-Later, find:
+**Edit 2 — re-assert the bed after plate detection.** The stock detection sequence
+zeroes the bed set at the top, so re-command it so it heats through the rest of prep
+and assists the soak:
 
 ```gcode
-M106 S255
-M109 S{nozzle_temperature[initial_extruder] - 90}
-M190 S{bed_temperature_initial_layer_single}
-M107 P2
+DETECT_BED_PLATE
+M140 S{bed_temperature_initial_layer_single} ; ADD: re-assert bed after detection
 ```
 
-Insert `M191` immediately after `M190`:
+**Edit 3 — replace the stock chamber wait with `M191`.** Find the later block and swap
+`WAIT_CHAMBER_TEMP` for `M191`:
 
 ```gcode
-M106 S255
-M109 S{nozzle_temperature[initial_extruder] - 90}
-M190 S{bed_temperature_initial_layer_single}
-M191 S{overall_chamber_temperature} ; wait for chamber; bed remains hot
+M190 S{bed_temperature_initial_layer_single}   ; stock bed wait
 M107 P2
+G90
+G0 Z5 F10000
+M191 S{overall_chamber_temperature}            ; REPLACES the chamber wait
+;WAIT_CHAMBER_TEMP TIMEOUT=180                  ; commented out
 ```
 
-Do not remove the profile's existing `WAIT_CHAMBER_TEMP TIMEOUT=180`. Add this as
-the first line of Machine end G-code unless it is already present:
+On **OrcaSlicer** (not SnapmakerOrca) add a release temperature so the print starts at
+the filament's "Minimal" chamber temp while heat continues:
+`M191 S{overall_chamber_temperature} R{chamber_minimal_temperature[initial_extruder]}`.
+SnapmakerOrca has no `chamber_minimal_temperature` variable, so omit `R` (the macro
+releases at `S-5`).
+
+Add `M141 S0` as the first line of Machine **end** G-code unless already present:
 
 ```gcode
 M141 S0 ; chamber off
 ```
 
-The supplied U1 start G-code also contains `M106 P2 S0` and later `M107 P2`. If
-this profile maps `P2` to the printer's auxiliary circulation fan, the `S0` leaves
-that fan off during warm-up. For the recommended 70% circulation starting point,
-change it to `M106 P2 S179` after confirming the U1 profile's `P2` mapping. Keep or
-relocate the later `M107 P2` depending on when circulation should stop. This fan is
-separate from DragonBreath's automatically controlled blower.
+**Disable Orca's injected wait.** In the filament preset, uncheck **"Activate
+temperature control"** (keep the printer preset's "Support controlling chamber
+temperature" on, and keep the chamber temperature value). Otherwise Orca injects a
+blocking `M191` before `PRINT_START` that fights this sequence and, on the U1, was seen
+to stall filament auto-feed. See [The OrcaSlicer trap](#the-orcaslicer-trap).
 
-After slicing, verify that there is no `M191` before
-`SET_PRINT_AUTO_BED_LEVELING`, that the early `M140`/`M141` and later
-`M190`/`M191` pairs render in that order, and that both chamber commands contain
-the same expected non-zero numeric target. If Orca rejects
-`overall_chamber_temperature`, use `{chamber_temperature[0]}` in both places.
+**Circulation fan.** The stock U1 start G-code also contains `M106 P2 S0` and later
+`M107 P2`. If this profile maps `P2` to the printer's auxiliary circulation fan, the
+`S0` leaves it off during warm-up; for ~70% circulation change it to `M106 P2 S179`
+after confirming the mapping. (The stock `SET_PURIFIER_MODE ... FAN_SPEED` also drives
+chamber circulation independently.) This fan is separate from DragonBreath's automatic
+blower.
+
+**After slicing, verify:** the `M141` appears near the top, and the **only** `M191` is
+the one *you* placed at the wait point — Orca's injected top-of-file `M191` is gone
+(see the OrcaSlicer caveat above). If Orca rejects `overall_chamber_temperature`, use
+`{chamber_temperature[0]}`.
 
 ## Quick diagnosis
 
