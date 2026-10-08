@@ -351,13 +351,15 @@ components/
   pb_hil/      JSON serial HIL console + safe dev-board injection
   pb_httpd/    DragonBreath HTTP control API (registered on the core server)
   db_portal/   product schema, auth, OTA identity + heater-safety adapter
+  dc_ui/       vendored/customized family SPA for the R9 fork
 main/          app_main: safety-first init + control loop
 docs/          hardware map, safety model, HIL guide, NTC RE report
 ```
 
 Managed components fetched from `dragon-core` are `dc_evlog`, `dc_source`,
-`dc_bambu`, `dc_wifi`, `dc_moonraker`, `dc_ui`, `dc_mqtt`, and `dc_portal`; they are
-not stored under this repository's `components/` directory. `dc_portal` owns the
+`dc_bambu`, `dc_wifi`, `dc_moonraker`, `dc_mqtt`, and `dc_portal`. This custom
+fork vendors its modified `dc_ui` under `components/dc_ui` so the R9 web UI is
+reproducible without editing generated `managed_components`. `dc_portal` owns the
 HTTP server, shared SPA, same-LAN/AP provisioning, captive DNS, logs, OTA and
 factory-reset transport. DragonBreath registers its product API and safety policy
 through `db_portal`.
