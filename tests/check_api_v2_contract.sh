@@ -64,7 +64,8 @@ grep -q 'id="d-action"' "$portal"                    # Dry: primary action prese
 grep -q 'id="a-msg"' "$portal"                       # Automatic: command feedback line present
 grep -q 'id="d-msg"' "$portal"                       # Dry: command feedback line present
 grep -q 'if(ui.schema!=null && ui.schema!==1) return' "$portal" # unknown UI schema degrades safely
-grep -q "command('auto', {target_c:fields.autoT.val" "$portal"         # auto sends the user's target+threshold
+grep -q "target_c:fields.autoT.val" "$portal"                       # AUTO sends the user's target
+grep -q "bed_threshold_c:fields.autoB.val" "$portal"                    # AUTO sends the user's bed threshold
 grep -q "command('drying_start', {target_c:fields.dryT.val" "$portal"  # dry sends the user's target+hours
 grep -q "Rejected: '+" "$portal"                     # command rejection surfaced to the user
 grep -q 'strcmp(s_replay\[i\].actor_id, actor_id)' "$httpd"
