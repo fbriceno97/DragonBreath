@@ -63,6 +63,8 @@ typedef struct {
     float manual_target_c;        // last accepted POWER_ON target
     float auto_target_c;          // last accepted AUTO target
     float auto_bed_threshold_c;   // last accepted AUTO bed threshold
+    bool auto_bed_trigger_enable; // optional high-bed-setpoint OR trigger
+    bool auto_boot_enable;        // remember AUTO armed/off across reboot
     float dry_target_c;           // last accepted drying target
     uint8_t dry_hours;            // last accepted drying duration
     float filter_temp_c;          // AUTO fan-only band: blower runs alone at bed>=this
@@ -98,6 +100,8 @@ typedef struct {
     bool auto_blocked_by_helper;  // AUTO is armed but held off because the Klipper
                                   // [dragonbreath] helper is the active controller
     float auto_bed_threshold_c;
+    bool auto_bed_trigger_enable; // persisted optional bed trigger
+    bool auto_bed_trigger_active; // live hysteresis latch
     pb_policy_params_t params;
 
     bool drying;
@@ -175,6 +179,19 @@ pb_policy_result_t pb_policy_set_fan(uint8_t percent, db_source_t source);
 pb_policy_result_t pb_policy_set_filter_config(float filter_temp_c, bool enable);
 float pb_policy_get_filter_temp_c(void);
 bool  pb_policy_get_filter_auto_enable(void);
+
+// Personal extension: optional high-bed-setpoint AUTO trigger. This is an OR
+// alongside the normal filament-zone trigger. The setting persists; changing
+// it never changes mode by itself. When AUTO is armed, a connected printer with
+// bed SETPOINT >= threshold may request auto_target_c even with no active print.
+pb_policy_result_t pb_policy_set_auto_preheat_config(
+    float auto_target_c, float bed_threshold_c, bool enable);
+bool pb_policy_get_auto_bed_trigger_enable(void);
+
+// PERSONAL_R9_OFF_SETPOINT_ONLY:
+// Update the remembered manual HEAT target as configuration only.
+// This does NOT change mode, energize the heater, or create a control lease.
+pb_policy_result_t pb_policy_set_manual_target_config(float target_c);
 
 // Update printer environment used by AUTO.  This is observer input, not a
 // control command, and therefore never creates or refreshes a control lease.
