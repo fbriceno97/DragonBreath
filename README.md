@@ -191,6 +191,25 @@ and a **`/console`** firmware-log viewer all share the same theme. Both **light 
 dark** themes are built in (auto / light / dark toggle), and the layout stacks
 vertically on phones while keeping the full layout on desktop.
 
+
+### Custom R9 additions
+
+The personal R9 fork adds persisted AUTO/OFF behavior, optional bed-setpoint preheat,
+Home Assistant sidecar control, and a Celsius-focused Home Assistant dashboard.
+
+<p>
+<img src="docs/screenshots/r9/auto-bed-preheat.png" width="390" alt="R9 automatic mode with optional high-bed preheat trigger">
+<img src="docs/screenshots/r9/home-assistant-mqtt.png" width="390" alt="R9 Home Assistant MQTT telemetry and control options">
+</p>
+
+| Home Assistant AUTO | Home Assistant HEAT | Home Assistant OFF |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/r9/home-assistant-auto.png" width="250" alt="Home Assistant card in AUTO mode"> | <img src="docs/screenshots/r9/home-assistant-heat.png" width="250" alt="Home Assistant card in HEAT mode"> | <img src="docs/screenshots/r9/home-assistant-off.png" width="250" alt="Home Assistant card in OFF mode with locked target"> |
+
+The repository examples and screenshots use documentation-only network values and
+generic account names; live broker addresses, usernames, passwords, and device-specific
+setup values are intentionally not published.
+
 ## Hardware
 ESP32-C3-MINI-1, mains PSU, PTC heater via SSR (GPIO18), ~220 VAC blower switched
 by a **TRIAC held on/off** (GPIO3 gate + GPIO7 zero-cross — **never** phase-angle
