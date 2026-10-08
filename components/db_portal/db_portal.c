@@ -215,6 +215,17 @@ static cJSON *field(const char *key, const char *label, const char *type,
     return f;
 }
 
+static cJSON *checkbox_field(const char *key, const char *label, bool value)
+{
+    cJSON *f = cJSON_CreateObject();
+    if (!f) return NULL;
+    cJSON_AddStringToObject(f, "key", key);
+    cJSON_AddStringToObject(f, "label", label);
+    cJSON_AddStringToObject(f, "type", "checkbox");
+    cJSON_AddBoolToObject(f, "value", value);
+    return f;
+}
+
 static cJSON *boolean_field(const char *key, const char *label, bool value)
 {
     cJSON *f = field(key, label, "select", value ? "1" : "0", false);
@@ -332,6 +343,10 @@ static cJSON *describe_product(void *ctx)
     pb_ha_get_config(&ha);
     snprintf(port, sizeof port, "%u", (unsigned)(ha.port ? ha.port : 1883));
     s = section(root, "Home Assistant MQTT");
+    add_field(s, checkbox_field("ha_telemetry", "Enable telemetry",
+                                ha.telemetry_enabled));
+    add_field(s, checkbox_field("ha_control", "Allow Home Assistant control",
+                                ha.allow_sidecar_control));
     add_field(s, field("ha_host", "Broker host", "text", ha.host, false));
     add_field(s, field("ha_port", "Port", "number", port, false));
     add_field(s, field("ha_user", "Username", "text", ha.user, false));
@@ -476,6 +491,7 @@ static esp_err_t parse_product_request(const cJSON *values,
     PARSE_TEXT(bb_host); PARSE_TEXT(bb_serial); PARSE_TEXT(bb_code);
     PARSE_TEXT(ha_host); PARSE_PORT(ha_port); PARSE_TEXT(ha_user);
     PARSE_TEXT(ha_pass); PARSE_TEXT(ha_topic);
+    PARSE_BOOL(ha_telemetry); PARSE_BOOL(ha_control);
     PARSE_TEXT(km_host); PARSE_PORT(km_port); PARSE_TEXT(km_user);
     PARSE_TEXT(km_pass); PARSE_TEXT(km_inst); PARSE_TEXT(km_topic);
     PARSE_BOOL(km_tls); PARSE_BOOL(km_writeback);
@@ -600,7 +616,10 @@ static esp_err_t guard_operation(dc_portal_operation_t operation, void *ctx,
     (void)ctx;
     pb_policy_snapshot_t snap;
     pb_policy_get_snapshot(&snap);
-    if (snap.mode == PB_MODE_OFF && !snap.heater_output) return ESP_OK;
+    // PERSONAL_R7_IDLE_AUTO_MAINTENANCE:
+    // AUTO may be armed while completely idle. Maintenance is safe when
+    // there is no heater demand and the SSR output is not energized.
+    if (!snap.heater_demand && !snap.heater_output) return ESP_OK;
     snprintf(message, message_size, "Turn the heater off before %s.",
              operation == DC_PORTAL_OPERATION_OTA ? "updating" : "a factory reset");
     return ESP_ERR_INVALID_STATE;
