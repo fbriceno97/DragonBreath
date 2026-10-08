@@ -2695,51 +2695,141 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
     else setStatus('m-status', 'Heater is off.');
   }
   function renderAuto(s){
-    var armed = s.mode==='auto', eng = s.environment.auto_engaged;
-    // Source capability: bed-follow sources (Prusa) set the chamber via the bed
-    // threshold + target controls below; filament-aware sources (Klipper/Bambu)
-    // follow the loaded filament's zone. Toggle the AUTO card to match the source.
-    var bedFollow = isBedFollow(s);
-    var tgtGrp = document.getElementById('a-range').closest('.ctl-group');
-    var bedGrp = document.getElementById('a-bed-range').closest('.ctl-group');
-    if(tgtGrp) tgtGrp.hidden = !bedFollow;
-    if(bedGrp) bedGrp.hidden = !bedFollow;
-    var desc = document.getElementById('a-desc');
-    if(desc) desc.innerHTML = bedFollow
-      ? '<strong>Automatic mode:</strong> the chamber follows the printer’s bed — while a print runs it heats to the <strong>Chamber target</strong> once the bed setpoint reaches the <strong>Bed threshold</strong> below. Your printer reports no filament type, so set the bed→chamber rule here.'
-      : '<strong>Automatic mode:</strong> while a print runs, the chamber follows the loaded filament’s profile — set the per-filament targets in <strong>Filament Zones</strong> on the dashboard. With no print, or a filament that has no zone set, the chamber stays idle. Requires a connected printer (Klipper or Bambu).';
+    var armed = s.mode==='auto';
+    var eng = !!s.environment.auto_engaged;
+
+    var bedEnabled =
+      !!s.environment.auto_bed_trigger_enabled;
+
+    var bedActive =
+      !!s.environment.auto_bed_trigger_active;
+
     var actBtn = $('a-action');
-    // The dragonbreath-klipper extension is itself an active chamber controller, so
-    // AUTO can't run alongside it. Make that visible: block arming and say why. If
-    // AUTO is somehow already armed when the helper appears, keep Disengage so the
-    // user can still clear it, and show the paused reason.
+
+    var desc = $('a-desc');
+    if(desc){
+      desc.innerHTML =
+        '<strong>Automatic mode:</strong> follows the loaded filament profile during a print. '+
+        'The optional <strong>high-bed preheat trigger</strong> can also preheat the chamber '+
+        'when the printer bed setpoint reaches the selected threshold. '+
+        'If both triggers are active, the filament-profile chamber target wins.';
+    }
+
     if(s.environment.klipper_helper_present){
       if(armed){
-        setAction('a-action', 'Disengage', '#i-square', true);
-        if(actBtn) actBtn.disabled = false;
-        setStatus('a-status', 'AUTO paused — the dragonbreath-klipper extension is controlling the chamber.', 'is-warn');
+        setAction(
+          'a-action',
+          'Disengage',
+          '#i-square',
+          true
+        );
+
+        if(actBtn) actBtn.disabled=false;
+
+        setStatus(
+          'a-status',
+          'AUTO paused — the dragonbreath-klipper extension is controlling the chamber.',
+          'is-warn'
+        );
       } else {
-        setAction('a-action', 'AUTO unavailable', '#i-refresh', false);
-        if(actBtn) actBtn.disabled = true;
-        setStatus('a-status', 'AUTO is off — the dragonbreath-klipper extension is controlling the chamber. Remove its [dragonbreath] config to use AUTO.', 'is-warn');
+        setAction(
+          'a-action',
+          'AUTO unavailable',
+          '#i-refresh',
+          false
+        );
+
+        if(actBtn) actBtn.disabled=true;
+
+        setStatus(
+          'a-status',
+          'AUTO is off — the dragonbreath-klipper extension is controlling the chamber.',
+          'is-warn'
+        );
       }
+
       return;
     }
-    if(actBtn) actBtn.disabled = false;
-    setAction('a-action', armed?'Disengage':(bedFollow?'Follow the printer bed':'Follow filament profile'),
-              armed?'#i-square':'#i-refresh', armed);
-    var mat = s.environment.material;
-    var tgt = Math.round(s.target.effective_c);
-    if(s.environment.control_source==='klipper' && !s.environment.moonraker_connected)
-      setStatus('a-status', 'Moonraker not connected — AUTO needs a printer link.', 'is-warn');
-    else if(bedFollow){
-      if(eng) setStatus('a-status', 'Engaged — heating the chamber to '+tgt+' °C.', 'is-live');
-      else if(armed) setStatus('a-status', 'Armed — waiting for the printer bed to reach the threshold.', 'is-live');
-      else setStatus('a-status', 'Not armed.');
+
+    if(actBtn) actBtn.disabled=false;
+
+    setAction(
+      'a-action',
+      armed ? 'Disengage' : 'Arm automatic mode',
+      armed ? '#i-square' : '#i-refresh',
+      armed
+    );
+
+    var mat=s.environment.material;
+    var tgt=Math.round(s.target.effective_c);
+
+    var bedSet=Number(s.environment.bed_target_c);
+    var bedThresh=Number(
+      s.environment.auto_bed_threshold_c
+    );
+
+    if(
+      s.environment.control_source==='klipper' &&
+      !s.environment.moonraker_connected
+    ){
+      setStatus(
+        'a-status',
+        'Moonraker not connected — AUTO needs a printer link.',
+        'is-warn'
+      );
+
+    } else if(eng){
+
+      if(
+        bedActive &&
+        !(Number(s.environment.src_target_c)>0)
+      ){
+        setStatus(
+          'a-status',
+          'Engaged — bed preheat active; heating chamber to '+
+          tgt+' °C.',
+          'is-live'
+        );
+      } else {
+        setStatus(
+          'a-status',
+          'Engaged — heating to '+
+          (mat ? mat+' ' : '')+
+          'profile ('+tgt+' °C).',
+          'is-live'
+        );
+      }
+
+    } else if(armed){
+
+      if(bedEnabled && isFinite(bedThresh)){
+        var txt =
+          'Armed — waiting for a filament profile or bed setpoint ≥ '+
+          Math.round(bedThresh)+' °C.';
+
+        if(isFinite(bedSet) && bedSet>0)
+          txt += ' Current bed setpoint: '+
+                 Math.round(bedSet)+' °C.';
+
+        setStatus(
+          'a-status',
+          txt,
+          'is-live'
+        );
+      } else {
+        setStatus(
+          'a-status',
+          'Armed — waiting for a print with a filament profile. Bed preheat trigger is disabled.',
+          'is-live'
+        );
+      }
+
+    } else {
+      setStatus(
+        'a-status',
+        'AUTO is off.'
+      );
     }
-    else if(eng) setStatus('a-status', 'Engaged — heating to '+(mat?mat+' ':'')+'profile ('+tgt+' °C).', 'is-live');
-    else if(armed) setStatus('a-status', 'Armed — waiting for a print with a filament profile.', 'is-live');
-    else setStatus('a-status', 'Not armed.');
   }
   function renderDry(s){
     var active = s.drying.active;
@@ -2798,8 +2888,85 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
     else { lease=null; runCmd('m-msg', command('power_on', {target_c:fields.man.val}).then(function(r){ lease=r.lease_id||null; touched.man=0; })); }
   });
   $('a-action').addEventListener('click', function(){
-    if(last && last.mode==='auto'){ runCmd('a-msg', command('off', {})); }
-    else runCmd('a-msg', command('auto', {target_c:fields.autoT.val, bed_threshold_c:fields.autoB.val}).then(function(){ touched.autoT=0; touched.autoB=0; }));
+    if(last && last.mode==='auto'){
+      runCmd(
+        'a-msg',
+        command('off', {})
+      );
+    } else {
+      runCmd(
+        'a-msg',
+        command(
+          'auto',
+          {
+            target_c:fields.autoT.val,
+            bed_threshold_c:fields.autoB.val
+          }
+        ).then(function(){
+          touched.autoT=0;
+          touched.autoB=0;
+        })
+      );
+    }
+  });
+
+  $('a-bed-save').addEventListener('click', function(){
+    var en=$('a-bed-enable').checked;
+
+    flash(
+      'a-bed-msg',
+      'Saving…'
+    );
+
+    request(
+      '/settings?auto_target='+
+        encodeURIComponent(fields.autoT.val)+
+      '&auto_bed_threshold='+
+        encodeURIComponent(fields.autoB.val)+
+      '&auto_bed_trigger='+
+        (en ? 1 : 0),
+      {}
+    )
+    .then(function(cfg){
+
+      if(cfg){
+        if(isFinite(cfg.auto_target))
+          setField('autoT', cfg.auto_target);
+
+        if(isFinite(cfg.auto_bed_threshold))
+          setField('autoB', cfg.auto_bed_threshold);
+
+        if(
+          typeof cfg.auto_bed_trigger==='boolean'
+        ){
+          $('a-bed-enable').checked =
+            cfg.auto_bed_trigger;
+        }
+      }
+
+      touched.autoT=0;
+      touched.autoB=0;
+
+      flash(
+        'a-bed-msg',
+        en
+          ? 'Saved — bed setpoint ≥ '+
+            fields.autoB.val+
+            ' °C preheats chamber to '+
+            fields.autoT.val+
+            ' °C.'
+          : 'Saved — bed preheat trigger disabled.',
+        'is-ok'
+      );
+    })
+    .catch(function(j){
+      flash(
+        'a-bed-msg',
+        'Save failed: '+
+          ((j&&(j.message||j.error))||'error'),
+        'is-error'
+      );
+    });
   });
   $('d-action').addEventListener('click', function(){
     if(last && last.drying && last.drying.active){ runCmd('d-msg', command('drying_stop', {})); }
@@ -2808,6 +2975,26 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
 
   /* Initial paint before the first snapshot arrives. */
   Object.keys(fields).forEach(renderField);
+
+  fetch('/settings', {cache:'no-store'})
+    .then(function(r){ return r.json(); })
+    .then(function(cfg){
+      if(!cfg) return;
+
+      if(isFinite(cfg.auto_target))
+        setField('autoT', cfg.auto_target);
+
+      if(isFinite(cfg.auto_bed_threshold))
+        setField('autoB', cfg.auto_bed_threshold);
+
+      if(
+        typeof cfg.auto_bed_trigger==='boolean'
+      ){
+        $('a-bed-enable').checked =
+          cfg.auto_bed_trigger;
+      }
+    })
+    .catch(function(){});
 
   /* ===== U3: Settings ========================================================
      Safety limits (/settings), control token (/api/v2/token), event log
