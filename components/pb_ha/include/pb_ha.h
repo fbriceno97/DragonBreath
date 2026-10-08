@@ -24,6 +24,8 @@ typedef struct {
     char     user[32];   // broker username (optional)
     char     pass[64];   // broker password (optional)
     char     topic[48];  // topic prefix (defaults to "dragonbreath")
+    bool     telemetry_enabled;      // sidecar telemetry while another source is selected
+    bool     allow_sidecar_control;  // Bambu selected: HA may also issue commands
 } pb_ha_config_t;
 
 typedef struct {
