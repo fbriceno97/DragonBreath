@@ -29,6 +29,8 @@ Custom fork based on DragonBreath v1.1.19.
   (no heater demand and SSR output off) and remains blocked while heat is active.
 - Vendor the customized `dc_ui` so the R9 web interface is reproducible from a
   clean checkout.
+- The setup/recovery access point can be fully disabled through the provisioning
+  API; when disabled, the UI reflects the state as **Off (set via API)**.
 
 ### Screenshots
 
