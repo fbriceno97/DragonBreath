@@ -14,3 +14,22 @@ Required custom cards used by this dashboard example:
 - Button Card (`custom:button-card`)
 
 The firmware itself does not depend on these Lovelace cards.
+
+## Screenshots
+
+### Native climate dashboard card
+
+| AUTO | HEAT | OFF |
+|:---:|:---:|:---:|
+| <img src="../screenshots/r9/home-assistant-auto.png" width="250" alt="DragonBreath Home Assistant card in AUTO mode"> | <img src="../screenshots/r9/home-assistant-heat.png" width="250" alt="DragonBreath Home Assistant card in HEAT mode"> | <img src="../screenshots/r9/home-assistant-off.png" width="250" alt="DragonBreath Home Assistant card in OFF mode"> |
+
+AUTO and HEAT expose the active Celsius target slider. OFF intentionally renders a
+locked gray `0 °C` control so changing a displayed target cannot accidentally imply
+that the heater is active.
+
+### MQTT sidecar options
+
+<img src="../screenshots/r9/home-assistant-mqtt.png" width="700" alt="Home Assistant MQTT telemetry and control options">
+
+The screenshot uses an RFC 5737 documentation-only broker address and a generic MQTT
+username. No live broker address or account name is stored in the repository image.
