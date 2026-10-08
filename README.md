@@ -206,6 +206,10 @@ Home Assistant sidecar control, and a Celsius-focused Home Assistant dashboard.
 |:---:|:---:|:---:|
 | <img src="docs/screenshots/r9/home-assistant-auto.png" width="250" alt="Home Assistant card in AUTO mode"> | <img src="docs/screenshots/r9/home-assistant-heat.png" width="250" alt="Home Assistant card in HEAT mode"> | <img src="docs/screenshots/r9/home-assistant-off.png" width="250" alt="Home Assistant card in OFF mode with locked target"> |
 
+**Recovery network:** the setup/recovery access point can be fully disabled through
+the provisioning API. When that API-only state is configured, the setup UI reflects it
+as **Off (set via API)**.
+
 The repository examples and screenshots use documentation-only network values and
 generic account names; live broker addresses, usernames, passwords, and device-specific
 setup values are intentionally not published.
