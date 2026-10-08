@@ -213,6 +213,8 @@ static cJSON *state_json(const pb_policy_snapshot_t *s)
     add_num1(environment, "bed_temperature_c", s->bed_c);
     add_num1(environment, "bed_target_c", s->bed_target_c);
     cJSON_AddBoolToObject(environment, "auto_engaged", s->auto_engaged);
+    cJSON_AddBoolToObject(environment, "auto_bed_trigger_enabled", s->auto_bed_trigger_enable);
+    cJSON_AddBoolToObject(environment, "auto_bed_trigger_active", s->auto_bed_trigger_active);
     cJSON_AddBoolToObject(environment, "auto_filtering", s->auto_filtering);
     // The Klipper [dragonbreath] helper is installed (mode-independent) so the
     // dashboard can warn AUTO is unavailable before arming; auto_blocked_by_helper
@@ -243,6 +245,7 @@ static cJSON *state_json(const pb_policy_snapshot_t *s)
     add_num1(pj, "manual_target_c", s->params.manual_target_c);
     add_num1(pj, "auto_target_c", s->params.auto_target_c);
     add_num1(pj, "auto_bed_threshold_c", s->params.auto_bed_threshold_c);
+    cJSON_AddBoolToObject(pj, "auto_bed_trigger_enable", s->params.auto_bed_trigger_enable);
     add_num1(pj, "dry_target_c", s->params.dry_target_c);
     cJSON_AddNumberToObject(pj, "dry_hours", s->params.dry_hours);
     add_num1(pj, "filter_temp_c", s->params.filter_temp_c);
@@ -730,7 +733,9 @@ static esp_err_t settings_send(httpd_req_t *req)
     // Board's per-Rref foldback-cut default (shown as the slider's "auto" value).
     float fbdef_cut, fbdef_resume;
     pb_heater_foldback_thresholds(pb_ntc_rref_kohm(), &fbdef_cut, &fbdef_resume);
-    char buf[600];
+    char buf[800];
+    pb_policy_params_t pp;
+    pb_policy_get_params(&pp);
     int n = snprintf(buf, sizeof buf,
         "{\"max\":%.1f,\"max_min\":%.1f,\"max_abs\":%.1f,"
         "\"comms_ms\":%u,\"comms_ms_min\":%u,\"comms_ms_max\":%u,"
@@ -738,6 +743,8 @@ static esp_err_t settings_send(httpd_req_t *req)
         "\"fb_cut\":%.1f,\"fb_cut_default\":%.1f,\"fb_cut_min\":%.1f,\"fb_cut_max\":%.1f,"
         "\"filter_temp\":%.1f,\"filter_temp_min\":%.1f,\"filter_temp_max\":%.1f,"
         "\"filter_auto\":%s,"
+        "\"auto_target\":%.1f,\"auto_bed_threshold\":%.1f,"
+        "\"auto_bed_trigger\":%s,"
         "\"leds_enabled\":%s}",
         (double)pb_heater_get_max_target_c(),
         (double)PB_HEATER_MIN_TARGET_C,
@@ -756,6 +763,9 @@ static esp_err_t settings_send(httpd_req_t *req)
         (double)PB_POLICY_FILTER_TEMP_MIN_C,
         (double)PB_POLICY_FILTER_TEMP_MAX_C,
         pb_policy_get_filter_auto_enable() ? "true" : "false",
+        (double)pp.auto_target_c,
+        (double)pp.auto_bed_threshold_c,
+        pp.auto_bed_trigger_enable ? "true" : "false",
         pb_leds_get_enabled() ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
@@ -805,7 +815,7 @@ static esp_err_t settings_post(httpd_req_t *req)
 {
     if (auth_reject(req)) return ESP_OK;
 
-    char q[128];
+    char q[256];
     if (httpd_req_get_url_query_str(req, q, sizeof q) != ESP_OK) {
         // Fall back to a query-style body ("max=60&comms_ms=30000").
         int r = httpd_req_recv(req, q, sizeof q - 1);
@@ -859,6 +869,44 @@ static esp_err_t settings_post(httpd_req_t *req)
             applied = true;
         }
     }
+    // Optional high-bed-setpoint AUTO preheat. Any supplied subset is merged with
+    // the remembered values and persisted through pb_policy.
+    {
+        char v2[24], v3[24];
+        bool have_target = httpd_query_key_value(q, "auto_target", v, sizeof v) == ESP_OK;
+        bool have_bed = httpd_query_key_value(q, "auto_bed_threshold", v2, sizeof v2) == ESP_OK;
+        bool have_enable = httpd_query_key_value(q, "auto_bed_trigger", v3, sizeof v3) == ESP_OK;
+        if (have_target || have_bed || have_enable) {
+            pb_policy_params_t p;
+            pb_policy_get_params(&p);
+            float at = p.auto_target_c;
+            float bt = p.auto_bed_threshold_c;
+            bool en = p.auto_bed_trigger_enable;
+            if (have_target && !parse_temp(v, &at)) {
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad auto_target");
+                return ESP_FAIL;
+            }
+            if (have_bed && !parse_temp(v2, &bt)) {
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad auto_bed_threshold");
+                return ESP_FAIL;
+            }
+            if (have_enable) {
+                uint32_t on;
+                if (!parse_u32(v3, &on)) {
+                    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad auto_bed_trigger");
+                    return ESP_FAIL;
+                }
+                en = on != 0;
+            }
+            if (pb_policy_set_auto_preheat_config(at, bt, en) != PB_POLICY_OK) {
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                    "AUTO preheat target/threshold out of range");
+                return ESP_FAIL;
+            }
+            applied = true;
+        }
+    }
+
     if (httpd_query_key_value(q, "leds_enabled", v, sizeof v) == ESP_OK) {
         uint32_t on;
         if (!parse_u32(v, &on)) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad leds_enabled"); return ESP_FAIL; }
@@ -868,7 +916,7 @@ static esp_err_t settings_post(httpd_req_t *req)
         applied = true;
     }
     if (!applied) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no known settings (max, comms_ms, cool_release, fb_cut, filter_temp, filter_auto, leds_enabled)");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no known settings (max, comms_ms, cool_release, fb_cut, filter_temp, filter_auto, auto_target, auto_bed_threshold, auto_bed_trigger, leds_enabled)");
         return ESP_FAIL;
     }
     return settings_send(req);   // echo the clamped result
@@ -1031,7 +1079,9 @@ static bool device_armed(void)
 {
     pb_policy_snapshot_t snap;
     pb_policy_get_snapshot(&snap);
-    return snap.mode != PB_MODE_OFF || snap.heater_output;
+    // AUTO may be armed while completely idle. Block destructive/reboot
+    // operations only while heat is actually demanded or the SSR is on.
+    return snap.heater_demand || snap.heater_output;
 }
 
 // True (and already responded with 409) when a mutating maintenance action must
@@ -1275,6 +1325,45 @@ static esp_err_t token_post(httpd_req_t *req)
     return send_json(req, o);
 }
 
+
+static esp_err_t preheat_page_get(httpd_req_t *req)
+{
+    static const char page[] =
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>DragonBreath Bed Preheat</title>"
+        "<style>"
+        "body{font-family:system-ui;background:#101820;color:#eee;max-width:650px;margin:30px auto;padding:18px}"
+        ".card{background:#18242f;padding:20px;border-radius:14px}label{display:block;margin:14px 0 6px}"
+        "input[type=number],input[type=password]{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #506070;background:#0d141a;color:#fff}"
+        "button{margin-top:18px;padding:12px 18px;border:0;border-radius:9px;font-weight:700;cursor:pointer}"
+        ".row{display:flex;gap:12px;align-items:center}.row input{width:auto}"
+        "#msg{margin-top:15px;white-space:pre-wrap}.muted{color:#aebbc5;font-size:.92rem}"
+        "a{color:#76b7ff}</style></head><body>"
+        "<h2>DragonBreath · High-bed preheat</h2><div class='card'>"
+        "<div class='row'><input id='en' type='checkbox'><label for='en' style='margin:0'>Enable high-bed-setpoint trigger</label></div>"
+        "<p class='muted'>AUTO heats when the filament profile requests heat <b>OR</b> this optional bed-setpoint trigger is active.</p>"
+        "<label>Bed setpoint trigger (°C)</label><input id='bed' type='number' min='40' max='120' step='1'>"
+        "<label>Chamber target for bed-trigger preheat (°C)</label><input id='target' type='number' min='30' max='70' step='1'>"
+        "<label>Control token (leave blank unless you configured one)</label><input id='tok' type='password'>"
+        "<button onclick='saveCfg()'>Save</button>"
+        "<p id='msg'></p><p class='muted'>Filament-zone heating is unchanged and wins the target when both triggers are active. "
+        "The bed trigger does not require an active print.</p>"
+        "<p><a href='/'>Back to dashboard</a></p></div>"
+        "<script>"
+        "async function load(){let s=await (await fetch('/settings',{cache:'no-store'})).json();"
+        "en.checked=!!s.auto_bed_trigger;bed.value=s.auto_bed_threshold;target.value=s.auto_target;"
+        "msg.textContent='Current: '+(en.checked?'enabled':'disabled')+' · bed ≥ '+bed.value+'°C → chamber '+target.value+'°C';}"
+        "async function saveCfg(){let q=new URLSearchParams({auto_bed_trigger:en.checked?'1':'0',auto_bed_threshold:bed.value,auto_target:target.value});"
+        "let t=tok.value||'web';let r=await fetch('/settings?'+q,{method:'POST',headers:{'X-DragonBreath-Auth':t}});"
+        "let x=await r.text();if(!r.ok){msg.textContent='Save failed: '+r.status+' '+x;return;}msg.textContent='Saved. '+x;await load();}"
+        "load().catch(e=>msg.textContent='Load failed: '+e);"
+        "</script></body></html>";
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(req, page);
+}
+
 esp_err_t pb_httpd_register(httpd_handle_t server)
 {
     if (!server) return ESP_ERR_INVALID_ARG;
@@ -1296,6 +1385,7 @@ esp_err_t pb_httpd_register(httpd_handle_t server)
     httpd_uri_t health = { .uri = "/api/v2/health",    .method = HTTP_GET,  .handler = health_get };
     httpd_uri_t setg   = { .uri = "/settings",         .method = HTTP_GET,  .handler = settings_get };
     httpd_uri_t setp   = { .uri = "/settings",         .method = HTTP_POST, .handler = settings_post };
+    httpd_uri_t preht  = { .uri = "/preheat",          .method = HTTP_GET,  .handler = preheat_page_get };
     httpd_uri_t logs   = { .uri = "/api/v2/logs",      .method = HTTP_GET,  .handler = logs_get };
     httpd_uri_t cons   = { .uri = "/api/v2/console",   .method = HTTP_GET,  .handler = console_get };
     httpd_uri_t rst    = { .uri = "/api/v2/restart",   .method = HTTP_POST, .handler = restart_post };
@@ -1316,6 +1406,7 @@ esp_err_t pb_httpd_register(httpd_handle_t server)
     httpd_register_uri_handler(s_server, &health);
     httpd_register_uri_handler(s_server, &setg);
     httpd_register_uri_handler(s_server, &setp);
+    httpd_register_uri_handler(s_server, &preht);
     httpd_register_uri_handler(s_server, &logs);
     httpd_register_uri_handler(s_server, &cons);
     httpd_register_uri_handler(s_server, &rst);
