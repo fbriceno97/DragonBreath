@@ -115,7 +115,10 @@ done
 # supplies API registration, authorization, heater safety and image identity.
 grep -q 'dc_portal_start(&cfg)' "$adapter"
 grep -q 'pb_httpd_register(server)' "$adapter"
-grep -q 'snap.mode == PB_MODE_OFF && !snap.heater_output' "$adapter"
+grep -q '!snap.heater_demand && !snap.heater_output' "$adapter" || {
+    echo "maintenance guard no longer allows idle AUTO while blocking active heat" >&2
+    exit 1
+}
 grep -q 'panda_breath' "$adapter"
 grep -q '\.uri = "/km-config"' "$adapter" || {
     echo "shipped Klipper-MQTT config generator route is missing" >&2
