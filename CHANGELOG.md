@@ -7,6 +7,44 @@ below into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [1.1.19-r9] - 2026-10-08
+
+Custom fork based on DragonBreath v1.1.19.
+
+### Added
+- Persist the user's explicit AUTO/OFF preference across reboot.
+- Add an optional high-bed-setpoint AUTO preheat trigger. Filament-profile demand
+  remains authoritative when both triggers request chamber heat.
+- Add Home Assistant MQTT sidecar controls for **Enable telemetry** and
+  **Allow Home Assistant control** while Bambu remains the printer/AUTO source.
+- Preserve the native Home Assistant climate entity with `off`, `heat`, and
+  `auto` modes and include reproducible Home Assistant dashboard examples.
+
+### Changed
+- AUTO target changes update/persist the AUTO target and remain in AUTO.
+- HEAT target changes update the live manual target and remain in HEAT.
+- OFF target changes only update the remembered manual setpoint; they do not start
+  the heater or create a control lease.
+- Restart/OTA/factory-reset maintenance is permitted while AUTO is genuinely idle
+  (no heater demand and SSR output off) and remains blocked while heat is active.
+- Vendor the customized `dc_ui` so the R9 web interface is reproducible from a
+  clean checkout.
+
+### Screenshots
+
+<p>
+<img src="docs/screenshots/r9/auto-bed-preheat.png" width="390" alt="R9 automatic mode with optional high-bed preheat trigger">
+<img src="docs/screenshots/r9/home-assistant-mqtt.png" width="390" alt="R9 Home Assistant MQTT telemetry and control options">
+</p>
+
+| AUTO | HEAT | OFF |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/r9/home-assistant-auto.png" width="250" alt="Home Assistant card in AUTO mode"> | <img src="docs/screenshots/r9/home-assistant-heat.png" width="250" alt="Home Assistant card in HEAT mode"> | <img src="docs/screenshots/r9/home-assistant-off.png" width="250" alt="Home Assistant card in OFF mode with locked target"> |
+
+The screenshots are privacy-sanitized: live LAN addresses, account names, and
+device-specific setup identifiers are replaced with documentation-only examples.
+
+
 ## [1.1.19] - 2026-09-23
 
 ### Added
