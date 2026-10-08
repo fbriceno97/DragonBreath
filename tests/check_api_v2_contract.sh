@@ -5,10 +5,12 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 httpd="$root/components/pb_httpd/pb_httpd.c"
 adapter="$root/components/db_portal/db_portal.c"
 core_portal="$root/managed_components/dc_portal/dc_portal.c"
-# The dashboard/control UI is supplied by the pinned dragon-core dc_ui component.
+# The custom fork vendors dc_ui locally; retain managed/sibling fallbacks so this
+# contract check also remains useful against an upstream-style checkout.
 portal="${DC_UI_HTML:-}"
 if [ -z "$portal" ]; then
     for candidate in \
+        "$root/components/dc_ui/www/app.html" \
         "$root/managed_components/dc_ui/www/app.html" \
         "$root/../dragon-core/components/dc_ui/www/app.html"
     do
@@ -16,7 +18,7 @@ if [ -z "$portal" ]; then
     done
 fi
 if [ ! -f "$portal" ]; then
-    echo "dc_ui SPA not found; run the ESP-IDF dependency build first" >&2
+    echo "dc_ui SPA not found (local vendor, managed component, or sibling dragon-core)" >&2
     exit 1
 fi
 
