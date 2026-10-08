@@ -618,6 +618,9 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
 .provision-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
 .provision-field{ display:flex; flex-direction:column; gap:4px; min-width:0; }
 .provision-field label{ color:var(--muted-foreground); font-size:11px; font-weight:600; text-transform:uppercase; }
+.provision-check{ flex-direction:row; align-items:center; gap:9px; }
+.provision-check label{ display:flex; align-items:center; gap:9px; color:var(--foreground); font-size:14px; font-weight:500; text-transform:none; cursor:pointer; }
+.provision-check input[type=checkbox]{ width:17px; height:17px; min-height:0; padding:0; flex:none; accent-color:var(--primary); cursor:pointer; }
 .provision-field input,.provision-field select{ min-height:34px; width:100%; padding:5px 8px; border:1px solid var(--input);
   border-radius:var(--radius-lg); color:var(--foreground); background:var(--secondary); font:inherit; }
 .provision-actions{ display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }
@@ -774,37 +777,131 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
         </div>
       </section>
 
-      <!-- Automatic: follow the printer bed above a threshold (auto command). -->
+      <!-- Automatic: filament profile OR optional high-bed-setpoint preheat. -->
       <section class="page-only mode-controls" data-page-content="auto" data-capability="auto">
-        <p id="a-desc"><strong>Automatic mode:</strong> while a print runs, the chamber follows the loaded filament's profile — set the per-filament targets in <strong>Filament Zones</strong> on the dashboard. With no print, or a filament that has no zone set, the chamber stays idle. Requires a connected printer (Klipper or Bambu).</p>
-        <div class="ctl-group" hidden>
+
+        <p id="a-desc">
+          <strong>Automatic mode:</strong> follows the loaded filament profile during a print.
+          The optional high-bed preheat trigger can also preheat the chamber from the
+          printer's bed setpoint.
+        </p>
+
+        <div class="ctl-group">
           <div class="ctl-head">
-            <span class="form-label">Chamber target</span>
+            <span class="form-label">High-bed preheat trigger</span>
+
+            <label style="display:flex;align-items:center;gap:.45rem">
+              <input type="checkbox" id="a-bed-enable">
+              <span>Enabled</span>
+            </label>
+          </div>
+
+          <div class="ctl-hint">
+            Optional. If both the filament profile and bed trigger request heat,
+            the filament profile target wins.
+          </div>
+        </div>
+
+        <div class="ctl-group" id="a-target-group">
+          <div class="ctl-head">
+            <span class="form-label">Chamber target for bed preheat</span>
             <span class="ctl-hint" data-maxhint>30–70 °C</span>
           </div>
+
           <div class="touch-adjust">
-            <button class="btn step-btn" type="button" data-step="autoT,-1" aria-label="Decrease chamber target"><svg class="icon"><use href="#i-minus"/></svg></button>
-            <output class="touch-value" id="a-value">50 <span>°C</span></output>
-            <button class="btn step-btn" type="button" data-step="autoT,1" aria-label="Increase chamber target"><svg class="icon"><use href="#i-plus"/></svg></button>
+            <button class="btn step-btn"
+                    type="button"
+                    data-step="autoT,-1"
+                    aria-label="Decrease chamber target">
+              <svg class="icon"><use href="#i-minus"/></svg>
+            </button>
+
+            <output class="touch-value" id="a-value">
+              50 <span>°C</span>
+            </output>
+
+            <button class="btn step-btn"
+                    type="button"
+                    data-step="autoT,1"
+                    aria-label="Increase chamber target">
+              <svg class="icon"><use href="#i-plus"/></svg>
+            </button>
           </div>
-          <input class="form-range" id="a-range" type="range" min="30" max="70" step="1" value="50" aria-label="Chamber target">
+
+          <input class="form-range"
+                 id="a-range"
+                 type="range"
+                 min="30"
+                 max="70"
+                 step="1"
+                 value="50"
+                 aria-label="Chamber target for bed preheat">
         </div>
-        <div class="ctl-group" hidden>
+
+        <div class="ctl-group" id="a-bed-group">
           <div class="ctl-head">
-            <span class="form-label">Bed threshold</span>
+            <span class="form-label">Bed setpoint trigger</span>
             <span class="ctl-hint">40–120 °C</span>
           </div>
+
           <div class="touch-adjust">
-            <button class="btn step-btn" type="button" data-step="autoB,-5" aria-label="Decrease bed threshold"><svg class="icon"><use href="#i-minus"/></svg></button>
-            <output class="touch-value" id="a-bed-value">100 <span>°C</span></output>
-            <button class="btn step-btn" type="button" data-step="autoB,5" aria-label="Increase bed threshold"><svg class="icon"><use href="#i-plus"/></svg></button>
+            <button class="btn step-btn"
+                    type="button"
+                    data-step="autoB,-5"
+                    aria-label="Decrease bed threshold">
+              <svg class="icon"><use href="#i-minus"/></svg>
+            </button>
+
+            <output class="touch-value" id="a-bed-value">
+              100 <span>°C</span>
+            </output>
+
+            <button class="btn step-btn"
+                    type="button"
+                    data-step="autoB,5"
+                    aria-label="Increase bed threshold">
+              <svg class="icon"><use href="#i-plus"/></svg>
+            </button>
           </div>
-          <input class="form-range" id="a-bed-range" type="range" min="40" max="120" step="1" value="100" aria-label="Bed threshold">
+
+          <input class="form-range"
+                 id="a-bed-range"
+                 type="range"
+                 min="40"
+                 max="120"
+                 step="1"
+                 value="100"
+                 aria-label="Bed setpoint trigger">
         </div>
+
+        <button class="btn btn-primary btn-block"
+                type="button"
+                id="a-bed-save">
+          <svg class="icon"><use href="#i-thermometer"/></svg>
+          <span>Save bed preheat settings</span>
+        </button>
+
+        <div class="mode-feedback"
+             id="a-bed-msg"
+             role="status"
+             aria-live="polite"></div>
+
         <div class="mode-status" id="a-status"></div>
+
         <div class="mode-footer">
-          <div class="mode-action"><button class="btn btn-primary btn-block" type="button" id="a-action"><svg class="icon"><use href="#i-refresh"/></svg> <span>Follow filament profile</span></button></div>
-          <div class="mode-feedback" id="a-msg" role="status" aria-live="polite"></div>
+          <div class="mode-action">
+            <button class="btn btn-primary btn-block"
+                    type="button"
+                    id="a-action">
+              <svg class="icon"><use href="#i-refresh"/></svg>
+              <span>Arm automatic mode</span>
+            </button>
+          </div>
+
+          <div class="mode-feedback"
+               id="a-msg"
+               role="status"
+               aria-live="polite"></div>
         </div>
       </section>
 
@@ -1082,7 +1179,7 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
       </section>
 
       <!-- Brand + firmware version footer (replaces the removed header brand). -->
-      <div class="app-version"><span id="dc-product-title">DragonBreath</span> <span id="db-version">—</span></div>
+      <div class="app-version"><span id="dc-product-title">DragonBreath</span> <span id="db-version">—</span><span> • Mod: AUTO Boot, Bed Preheat</span></div>
     </main>
   </div>
 </div>
@@ -1458,8 +1555,21 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
   }
   function fieldControl(field){
     var wrap=document.createElement('div'); wrap.className='provision-field';
-    var label=document.createElement('label'); label.textContent=field.label||field.key; wrap.appendChild(label);
-    var input;
+    var input,label;
+    if(field.type==='checkbox'){
+      wrap.className+=' provision-check';
+      label=document.createElement('label');
+      input=document.createElement('input'); input.type='checkbox';
+      input.dataset.setupKey=field.key;
+      input.checked=(field.value===true||field.value===1||field.value==='1'||field.value==='true');
+      input.id='dc-field-'+field.key; label.htmlFor=input.id;
+      label.appendChild(input);
+      var text=document.createElement('span'); text.textContent=field.label||field.key; label.appendChild(text);
+      wrap.appendChild(label);
+      if(field.hint){var hint=document.createElement('small');hint.textContent=field.hint;wrap.appendChild(hint);}
+      return wrap;
+    }
+    label=document.createElement('label'); label.textContent=field.label||field.key; wrap.appendChild(label);
     if(field.type==='select'){
       input=document.createElement('select'); (field.options||[]).forEach(function(opt){
         var o=document.createElement('option'); o.value=String(opt.value); o.textContent=opt.label||String(opt.value); input.appendChild(o);
@@ -1552,14 +1662,14 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
       }
       var actions=document.createElement('div');actions.className='provision-actions';var save=document.createElement('button');save.className='btn btn-primary';save.type='button';save.textContent=section.action_label||'Save settings';
       save.addEventListener('click',function(){
-        var values={};card.querySelectorAll('[data-setup-key]').forEach(function(el){values[el.dataset.setupKey]=el.type==='number'?Number(el.value):(el.value);});
+        var values={};card.querySelectorAll('[data-setup-key]').forEach(function(el){values[el.dataset.setupKey]=el.type==='checkbox'?(el.checked?'1':'0'):(el.type==='number'?Number(el.value):el.value);});
         setupMessage('dc-system-msg','Saving…');dcRequest('/api/v1/provisioning/product',{values:values}).then(function(j){setupMessage('dc-system-msg',j.message||'Settings saved.');loadProvisioning();}).catch(function(j){setupMessage('dc-system-msg',j.error||'Could not save settings.',true);});
       });actions.appendChild(save);card.appendChild(actions);host.appendChild(card);
       var vw=section.visible_when;
       if(vw&&vw.field){var vals=Array.isArray(vw.values)?vw.values:[vw.value];conds.push({card:card,field:vw.field,values:vals.map(String)});}
     });
     if(conds.length){
-      var val=function(k){var el=host.querySelector('[data-setup-key=\"'+k+'\"]');return el?String(el.value):null;};
+      var val=function(k){var el=host.querySelector('[data-setup-key=\"'+k+'\"]');return el?(el.type==='checkbox'?(el.checked?'1':'0'):String(el.value)):null;};
       var applyVis=function(){conds.forEach(function(c){var v=val(c.field);var hide=(v!==null&&c.values.indexOf(v)<0);c.card.hidden=hide;if(hide){c.card._autoDone=false;}else if(c.card._autoScan){c.card._autoScan();}});};
       var seen={};conds.forEach(function(c){seen[c.field]=1;});
       Object.keys(seen).forEach(function(k){var el=host.querySelector('[data-setup-key=\"'+k+'\"]');if(el)el.addEventListener('change',applyVis);});
