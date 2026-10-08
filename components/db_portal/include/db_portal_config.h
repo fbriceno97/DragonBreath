@@ -35,6 +35,7 @@ typedef struct {
     db_portal_text_value_t bb_host, bb_serial, bb_code;
     db_portal_text_value_t ha_host, ha_user, ha_pass, ha_topic;
     db_portal_port_value_t ha_port;
+    db_portal_bool_value_t ha_telemetry, ha_control;
     db_portal_text_value_t km_host, km_user, km_pass, km_inst, km_topic;
     db_portal_port_value_t km_port;
     db_portal_bool_value_t km_tls, km_writeback;
