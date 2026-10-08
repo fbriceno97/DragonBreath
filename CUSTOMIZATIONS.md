@@ -65,6 +65,30 @@ The vendored `dc_ui` adds:
 
 A small `/preheat` fallback page also remains available from the product HTTP service.
 
+## Screenshots
+
+### AUTO bed-preheat controls
+
+<img src="docs/screenshots/r9/auto-bed-preheat.png" width="640" alt="R9 automatic mode with optional bed-setpoint preheat trigger">
+
+### Home Assistant sidecar controls
+
+<img src="docs/screenshots/r9/home-assistant-mqtt.png" width="700" alt="R9 Home Assistant MQTT telemetry and control checkboxes">
+
+### Home Assistant dashboard modes
+
+| AUTO | HEAT | OFF |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/r9/home-assistant-auto.png" width="250" alt="Home Assistant AUTO mode"> | <img src="docs/screenshots/r9/home-assistant-heat.png" width="250" alt="Home Assistant HEAT mode"> | <img src="docs/screenshots/r9/home-assistant-off.png" width="250" alt="Home Assistant OFF mode with locked target"> |
+
+### Setup / recovery access point
+
+<img src="docs/screenshots/r9/setup-recovery-ap.png" width="695" alt="DragonBreath setup and recovery access-point settings with sanitized example values">
+
+All screenshots committed to the repository are privacy-sanitized. Private LAN
+addresses and account names were replaced with RFC 5737 documentation addresses and
+generic example values, and image metadata was stripped before commit.
+
 ## Files changed from upstream product source
 
 - `components/db_portal/db_portal.c`
