@@ -102,9 +102,10 @@ print(json.dumps({
     "source_sha":os.environ["SOURCE_SHA"],
     "idf_version":os.environ["IDF_VERSION"],
     "target":os.environ["TARGET"],"board":os.environ["BOARD"],
-    "shared_core":{"source":"github.com/justinh-rahb/dragon-core","ref":os.environ["CORE_REF"],"license":"MIT","components":["dc_evlog","dc_source","dc_bambu","dc_wifi","dc_moonraker","dc_ui","dc_mqtt","dc_portal"]},
+    "shared_core":{"source":"github.com/justinh-rahb/dragon-core","ref":os.environ["CORE_REF"],"license":"MIT","components":["dc_evlog","dc_source","dc_bambu","dc_wifi","dc_moonraker","dc_mqtt","dc_portal"]},
+    "vendored_components":{"dc_ui":{"source":"github.com/justinh-rahb/dragon-core","ref":"v0.35.2","path":"components/dc_ui","license":"MIT","customized":True}},
     "built_at_utc":os.environ["BUILT_AT"],
-    "note":"managed component versions in dependencies.lock (bundled)",
+    "note":"managed component versions are in dependencies.lock; customized dc_ui is vendored in-tree",
     "artifacts":arts,
 }, indent=2))
 PY
