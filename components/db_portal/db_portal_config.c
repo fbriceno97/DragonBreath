@@ -98,6 +98,10 @@ esp_err_t db_portal_plan_product_save(
     STAGE_TEXT(ha, ha_pass, pass, true);
     STAGE_TEXT(ha, ha_topic, topic, false);
     stage_port(&request->ha_port, &plan->ha.port, &plan->ha_changed);
+    stage_bool(&request->ha_telemetry, &plan->ha.telemetry_enabled,
+               &plan->ha_changed);
+    stage_bool(&request->ha_control, &plan->ha.allow_sidecar_control,
+               &plan->ha_changed);
 
     STAGE_TEXT(klipper_mqtt, km_host, host, false);
     STAGE_TEXT(klipper_mqtt, km_user, user, false);

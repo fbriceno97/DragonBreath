@@ -298,9 +298,9 @@ static void control_task(void *arg)
                         bed_target_c = ps.bed_target;
                         pb_policy_snapshot_t pol;
                         pb_policy_get_snapshot(&pol);
-                        if (pol.params.auto_bed_threshold_c > 0.0f &&
-                            ps.bed_target >= pol.params.auto_bed_threshold_c)
-                            src_target_c = pol.params.auto_target_c;
+                        // PERSONAL_BED_PREHEAT_OR_PATCH:
+                        // Do not synthesize src_target_c from the bed setpoint here.
+                        // The optional bed trigger is owned centrally by pb_policy.
                     }
                 }
                 break;
@@ -485,7 +485,43 @@ void app_main(void)
     pb_heater_load_fault();                  // restore a persisted safety-fault latch (fail-safe on NVS error)
     pb_ntc_load_calibration();               // persisted per-channel offsets (clamped ±5 °C on load)
     pb_leds_load_config();                   // persisted status-LED master enable (default ON)
-    pb_policy_load_params();                 // remembered mode params (never a mode/target — boot stays OFF)
+    pb_policy_load_params();                 // remembered mode params
+
+    // PERSONAL_AUTO_STATE_PERSIST
+    //
+    // AUTO now remembers the user's explicit armed/off preference:
+    //   AUTO armed -> reboot -> AUTO waiting/armed
+    //   AUTO off   -> reboot -> remains OFF
+    //
+    // Missing NVS preference defaults to OFF for safe migration from
+    // earlier personal builds that always forced AUTO on at startup.
+    {
+        pb_policy_params_t boot_params;
+        pb_policy_get_params(&boot_params);
+
+        if (boot_params.auto_boot_enable) {
+            pb_policy_result_t boot_auto = pb_policy_set_auto(
+                boot_params.auto_target_c,
+                boot_params.auto_bed_threshold_c,
+                DB_SOURCE_BOOT,
+                PB_POLICY_REVISION_ANY);
+
+            if (boot_auto == PB_POLICY_OK) {
+                ESP_LOGI(TAG,
+                    "personal build: persisted AUTO state restored ON "
+                    "(target %.1f C)",
+                    boot_params.auto_target_c);
+            } else {
+                ESP_LOGW(TAG,
+                    "personal build: persisted AUTO restore rejected (%s); "
+                    "staying OFF",
+                    pb_policy_result_str(boot_auto));
+            }
+        } else {
+            ESP_LOGI(TAG,
+                "personal build: persisted AUTO state is OFF; staying OFF");
+        }
+    }
 
     // Start the safety/telemetry loop — it then runs regardless of the network
     // coming up (a blocking/hung network stack must never stop it). The SSR is
@@ -561,25 +597,36 @@ void app_main(void)
         break;
     }
     ESP_LOGI(TAG, "control source: %s", dc_source_str(s_src));
-    // Home Assistant read-only telemetry alongside a non-HA control source: if an HA
-    // broker is configured but HA is NOT the selected source, start pb_ha in read-only
-    // monitor mode (publishes sensors + state, never controls). When HA *is* the
-    // source it already started above in full-control mode.
+    // PERSONAL_BAMBU_HA_CONTROL_GUI:
+    // When another source is selected, HA is an optional sidecar controlled by the
+    // two Home Assistant MQTT GUI checkboxes. Bambu remains the printer/AUTO source.
+    // If Home Assistant itself is selected as the primary source, pb_ha_start() above
+    // remains authoritative and these sidecar checkboxes are intentionally ignored.
     if (s_src != DC_SRC_HA) {
-        size_t sz = 0;
-        bool ha_cfg = false;
-        nvs_handle_t hh;
-        if (nvs_open("app_nvs", NVS_READONLY, &hh) == ESP_OK) {
-            ha_cfg = (nvs_get_str(hh, "ha_host", NULL, &sz) == ESP_OK && sz > 1);
-            nvs_close(hh);
-        }
-        if (ha_cfg) {
-            if ((e = pb_ha_start_readonly()) != ESP_OK)
-                ESP_LOGE(TAG, "pb_ha_start_readonly: %s (continuing; no HA telemetry)", esp_err_to_name(e));
-            else {
-                s_ha_up = true;
-                ESP_LOGI(TAG, "Home Assistant read-only telemetry enabled alongside %s", dc_source_str(s_src));
+        pb_ha_config_t ha_sidecar = {0};
+        bool ha_cfg = (pb_ha_get_config(&ha_sidecar) == ESP_OK && ha_sidecar.host[0]);
+        if (ha_cfg && ha_sidecar.telemetry_enabled) {
+            bool ha_write = (s_src == DC_SRC_BAMBU && ha_sidecar.allow_sidecar_control);
+            if (ha_write) {
+                if ((e = pb_ha_start()) != ESP_OK)
+                    ESP_LOGE(TAG, "pb_ha_start: %s (continuing; no HA control alongside Bambu)", esp_err_to_name(e));
+                else {
+                    s_ha_up = true;
+                    ESP_LOGI(TAG, "HA telemetry ENABLED; HA control ENABLED alongside Bambu; Bambu remains printer/AUTO source");
+                }
+            } else {
+                if ((e = pb_ha_start_readonly()) != ESP_OK)
+                    ESP_LOGE(TAG, "pb_ha_start_readonly: %s (continuing; no HA telemetry)", esp_err_to_name(e));
+                else {
+                    s_ha_up = true;
+                    if (s_src == DC_SRC_BAMBU)
+                        ESP_LOGI(TAG, "HA telemetry ENABLED; HA control DISABLED; read-only alongside Bambu");
+                    else
+                        ESP_LOGI(TAG, "HA telemetry ENABLED read-only alongside %s", dc_source_str(s_src));
+                }
             }
+        } else if (ha_cfg) {
+            ESP_LOGI(TAG, "HA telemetry DISABLED by GUI setting; no HA sidecar started");
         }
     }
     if ((e = db_portal_start()) != ESP_OK)

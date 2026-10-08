@@ -1,0 +1,23 @@
+template:
+  - number:
+      - name: "DragonBreath Target Celsius"
+        default_entity_id: number.dragonbreath_target_celsius
+        unique_id: dragonbreath_target_celsius
+        icon: mdi:thermometer
+        unit_of_measurement: "°C"
+        min: 20
+        max: 70
+        step: 1
+        state: >
+          {% set f = state_attr('climate.dragonbreath_dragonbreath', 'temperature') %}
+          {% if f is not none %}
+            {{ (((f | float) - 32) * 5 / 9) | round(0) }}
+          {% else %}
+            20
+          {% endif %}
+        set_value:
+          - action: climate.set_temperature
+            target:
+              entity_id: climate.dragonbreath_dragonbreath
+            data:
+              temperature: "{{ ((value | float) * 9 / 5 + 32) | round(1) }}"

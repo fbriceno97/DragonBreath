@@ -23,10 +23,7 @@ dependencies:
     git: https://github.com/justinh-rahb/dragon-core.git
     path: components/dc_moonraker
     version: v0.35.2
-  dc_ui:
-    git: https://github.com/justinh-rahb/dragon-core.git
-    path: components/dc_ui
-    version: v0.35.2
+  # dc_ui is vendored locally under components/dc_ui in this custom fork.
   dc_mqtt:
     git: https://github.com/justinh-rahb/dragon-core.git
     path: components/dc_mqtt

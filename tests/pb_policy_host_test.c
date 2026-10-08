@@ -756,8 +756,9 @@ static void test_params_persist_only_changed_keys(void)
     CHECK(pb_policy_persist_pending());
     CHECK(nvs_read("md_auto_tgt") == 5500);
     CHECK(nvs_read("md_auto_bed") == 9000);
-    // Only the two AUTO keys changed -- md_last must not be rewritten.
-    CHECK(nvs_writes - before == 2);
+    CHECK(nvs_read("md_auto_arm") == 1);
+    // R9 also persists the explicit AUTO-armed preference; md_last is untouched.
+    CHECK(nvs_writes - before == 3);
 
     CHECK(pb_policy_start_drying(
         50.0f, 3, DB_SOURCE_WEB, PB_POLICY_REVISION_ANY) == PB_POLICY_OK);

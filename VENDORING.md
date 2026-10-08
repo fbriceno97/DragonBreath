@@ -2,9 +2,11 @@
 
 DragonBreath consumes its board-neutral services from
 [`justinh-rahb/dragon-core`](https://github.com/justinh-rahb/dragon-core) through
-ESP-IDF Component Manager. The exact revision is pinned for every component in
-[`main/idf_component.yml`](main/idf_component.yml); the source is no longer copied
-into DragonBreath's `components/` directory.
+ESP-IDF Component Manager. The exact revision is pinned for the shared managed
+components in [`main/idf_component.yml`](main/idf_component.yml). This custom fork
+vendors **`dc_ui` locally under `components/dc_ui`** from dragon-core v0.35.2 so
+the modified R9 dashboard is reproducible from a clean clone; the remaining shared
+components continue to come from dragon-core through Component Manager.
 
 ## Current shared components
 
@@ -15,7 +17,7 @@ into DragonBreath's `components/` directory.
 | `dc_moonraker` | OpenVent `pv_moonraker` via DragonBreath `pb_moonraker` | Moonraker WebSocket client |
 | `dc_source` | DragonBreath `pb_source` | persisted control-source selection |
 | `dc_bambu` | DragonBreath `pb_bambu` | Bambu LAN MQTT client and printer status |
-| `dc_ui` | DragonBreath dashboard SPA | embedded family UI asset and capability gating |
+| `dc_ui` | dragon-core v0.35.2, vendored + customized in this fork | embedded family UI asset and capability gating |
 | `dc_mqtt` | DragonBreath HA/Klipper MQTT clients | shared ESP-MQTT session lifecycle and transport callbacks |
 | `dc_portal` | DragonBreath provisioning + recovery portal | HTTP server, family SPA, captive DNS, Wi-Fi/AP setup, logs, OTA and reset transport |
 

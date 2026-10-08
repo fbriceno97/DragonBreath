@@ -39,6 +39,8 @@ static const char *TAG = "pb_policy";
 #define PB_NVS_KEY_MANUAL           "md_last"
 #define PB_NVS_KEY_AUTO_TGT         "md_auto_tgt"
 #define PB_NVS_KEY_AUTO_BED         "md_auto_bed"
+#define PB_NVS_KEY_AUTO_BED_EN      "md_auto_bed_en"
+#define PB_NVS_KEY_AUTO_BOOT        "md_auto_arm"
 #define PB_NVS_KEY_DRY_TGT          "md_dry_tgt"
 #define PB_NVS_KEY_DRY_HRS          "md_dry_hrs"
 #define PB_NVS_KEY_FILT_TMP         "md_filt_tmp"
@@ -53,6 +55,8 @@ static const char *TAG = "pb_policy";
 #define PB_DEFAULT_MANUAL_TARGET_C  50.0f
 #define PB_DEFAULT_AUTO_TARGET_C    60.0f
 #define PB_DEFAULT_AUTO_BED_C      100.0f
+#define PB_DEFAULT_AUTO_BED_EN     false
+#define PB_DEFAULT_AUTO_BOOT_EN    false
 #define PB_DEFAULT_DRY_TARGET_C     60.0f
 #define PB_DEFAULT_DRY_HOURS        12U
 #define PB_DEFAULT_FILTER_TEMP_C    30.0f
@@ -80,6 +84,7 @@ typedef struct {
     float bed_c;          // measured bed temperature (display only)
     float bed_target_c;   // commanded bed setpoint (AUTO/filter trigger)
     float auto_bed_threshold_c;
+    bool auto_bed_engaged;        // PERSONAL_BED_PREHEAT_OR_PATCH: bed-trigger hysteresis latch
     bool auto_engaged;
     bool auto_filtering;         // AUTO fan-only band latch (blower on, no heat)
     float src_target_c;          // source-requested chamber target (e.g. Bambu filament
@@ -219,6 +224,7 @@ static void restore_or_off_locked(db_source_t source)
     s.mode = PB_MODE_AUTO;
     s.requested_target_c = s.params.auto_target_c;         // remembered, already clamped
     s.auto_bed_threshold_c = s.params.auto_bed_threshold_c;
+    s.auto_bed_engaged = false;
     s.auto_engaged = false;
     s.auto_filtering = false;
     s.drying_deadline_us = 0;
@@ -277,6 +283,8 @@ static void params_defaults_locked(void)
     s.params.manual_target_c      = PB_DEFAULT_MANUAL_TARGET_C;
     s.params.auto_target_c        = PB_DEFAULT_AUTO_TARGET_C;
     s.params.auto_bed_threshold_c = PB_DEFAULT_AUTO_BED_C;
+    s.params.auto_bed_trigger_enable = PB_DEFAULT_AUTO_BED_EN;
+    s.params.auto_boot_enable = PB_DEFAULT_AUTO_BOOT_EN;
     s.params.dry_target_c         = PB_DEFAULT_DRY_TARGET_C;
     s.params.dry_hours            = PB_DEFAULT_DRY_HOURS;
     s.params.filter_temp_c        = PB_DEFAULT_FILTER_TEMP_C;
@@ -303,6 +311,10 @@ static esp_err_t persist_params(const pb_policy_params_t *p)
                                c_to_centi(s_written.auto_target_c) },
         { PB_NVS_KEY_AUTO_BED, c_to_centi(p->auto_bed_threshold_c),
                                c_to_centi(s_written.auto_bed_threshold_c) },
+        { PB_NVS_KEY_AUTO_BED_EN, p->auto_bed_trigger_enable ? 1u : 0u,
+                                  s_written.auto_bed_trigger_enable ? 1u : 0u },
+        { PB_NVS_KEY_AUTO_BOOT,   p->auto_boot_enable ? 1u : 0u,
+                                  s_written.auto_boot_enable ? 1u : 0u },
         { PB_NVS_KEY_DRY_TGT,  c_to_centi(p->dry_target_c),
                                c_to_centi(s_written.dry_target_c) },
         { PB_NVS_KEY_DRY_HRS,  p->dry_hours, s_written.dry_hours },
@@ -388,6 +400,10 @@ void pb_policy_load_params(void)
             p.auto_target_c = centi_to_c(v);
         if (nvs_get_u32(h, PB_NVS_KEY_AUTO_BED, &v) == ESP_OK)
             p.auto_bed_threshold_c = centi_to_c(v);
+        if (nvs_get_u32(h, PB_NVS_KEY_AUTO_BED_EN, &v) == ESP_OK)
+            p.auto_bed_trigger_enable = (v != 0);
+        if (nvs_get_u32(h, PB_NVS_KEY_AUTO_BOOT, &v) == ESP_OK)
+            p.auto_boot_enable = (v != 0);
         if (nvs_get_u32(h, PB_NVS_KEY_DRY_TGT, &v) == ESP_OK)
             p.dry_target_c = centi_to_c(v);
         if (nvs_get_u32(h, PB_NVS_KEY_DRY_HRS, &v) == ESP_OK)
@@ -532,6 +548,7 @@ pb_policy_result_t pb_policy_set_auto(
     s.requested_target_c =
         target_c > max_target_c ? max_target_c : target_c;
     s.auto_bed_threshold_c = bed_threshold_c;
+    s.auto_bed_engaged = false;
     s.auto_engaged = false;
     s.auto_filtering = false;
     s.drying_deadline_us = 0;
@@ -540,11 +557,82 @@ pb_policy_result_t pb_policy_set_auto(
     revision_advance_locked(source);
     s.params.auto_target_c = s.requested_target_c;     // post-clamp
     s.params.auto_bed_threshold_c = bed_threshold_c;
+    s.params.auto_boot_enable = true;
     s.params_dirty = true;
     xSemaphoreGive(s_lock);
     wake_control_task();
     params_notify();
     return PB_POLICY_OK;
+}
+
+
+pb_policy_result_t pb_policy_set_auto_preheat_config(
+    float auto_target_c,
+    float bed_threshold_c,
+    bool enable)
+{
+    if (!s_lock || !isfinite(auto_target_c) || !isfinite(bed_threshold_c)
+            || auto_target_c < PB_MIN_MODE_TARGET_C
+            || bed_threshold_c < PB_AUTO_BED_MIN_C
+            || bed_threshold_c > PB_AUTO_BED_MAX_C)
+        return PB_POLICY_INVALID;
+
+    float max_target_c = pb_heater_get_max_target_c();
+    if (auto_target_c > max_target_c) auto_target_c = max_target_c;
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s.params.auto_target_c = auto_target_c;
+    s.params.auto_bed_threshold_c = bed_threshold_c;
+    s.params.auto_bed_trigger_enable = enable;
+    s.params_dirty = true;
+
+    if (s.mode == PB_MODE_AUTO) {
+        s.requested_target_c = auto_target_c;
+        s.auto_bed_threshold_c = bed_threshold_c;
+        if (!enable) s.auto_bed_engaged = false;
+        revision_advance_locked(DB_SOURCE_WEB);
+    }
+
+    xSemaphoreGive(s_lock);
+    wake_control_task();
+    params_notify();
+
+    ESP_LOGI(TAG, "AUTO bed preheat config: %s, bed>=%.1fC -> chamber %.1fC",
+             enable ? "enabled" : "disabled",
+             (double)bed_threshold_c, (double)auto_target_c);
+    return PB_POLICY_OK;
+}
+
+// PERSONAL_R9_OFF_SETPOINT_ONLY:
+// Store the next manual HEAT setpoint without changing operational state.
+pb_policy_result_t pb_policy_set_manual_target_config(float target_c)
+{
+    if (!s_lock || !isfinite(target_c) || target_c < PB_MIN_MODE_TARGET_C)
+        return PB_POLICY_INVALID;
+
+    float max_target_c = pb_heater_get_max_target_c();
+    if (target_c > max_target_c) target_c = max_target_c;
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s.params.manual_target_c = target_c;
+    s.params_dirty = true;
+    xSemaphoreGive(s_lock);
+
+    params_notify();
+
+    ESP_LOGI(TAG,
+             "Manual target config %.1fC (mode/heater unchanged)",
+             (double)target_c);
+    return PB_POLICY_OK;
+}
+
+bool pb_policy_get_auto_bed_trigger_enable(void)
+{
+    if (!s_lock) return false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool enabled = s.params.auto_bed_trigger_enable;
+    xSemaphoreGive(s_lock);
+    return enabled;
 }
 
 pb_policy_result_t pb_policy_start_drying(
@@ -592,8 +680,15 @@ void pb_policy_set_mode_off(db_source_t source)
     if (!s_lock) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     set_off_locked(source);
+
+    // PERSONAL_AUTO_STATE_PERSIST:
+    // A deliberate OFF command/button action must survive reboot.
+    s.params.auto_boot_enable = false;
+    s.params_dirty = true;
+
     xSemaphoreGive(s_lock);
     wake_control_task();
+    params_notify();
 }
 
 // #72: stop a manual run *as a run* (the on-device On-button toggle-off) — revert
@@ -974,25 +1069,48 @@ void pb_policy_tick(void)
 
         case PB_MODE_AUTO:
         {
-            // AUTO follows the active print's FILAMENT PROFILE (src_target_c — the
-            // filament zone, from the Bambu report or Moonraker's material). There is
-            // no bed-threshold heating any more: with no print, or a filament that has
-            // no zone set (src_target_c == 0), the chamber stays idle in AUTO. Heat
-            // engages only while the source is connected and reporting a zone target,
-            // and always to that target. Safety cutoffs are evaluated elsewhere and
-            // are unaffected; this only ever narrows when AUTO heats.
+            // PERSONAL_BED_PREHEAT_OR_PATCH
+            //
+            // AUTO has two independent heat requests:
+            //   1) existing filament-zone request (src_target_c > 0), and
+            //   2) optional high-bed-setpoint request.
+            //
+            // OR semantics: either request can engage heat. The filament zone remains
+            // the more specific target and therefore wins when both are active.
+            // The bed path uses the remembered AUTO chamber target and does NOT require
+            // an active print, which allows deliberate chamber preheating by setting
+            // the printer bed setpoint high enough before sending the real print.
             bool was_engaged = s.auto_engaged;
-            // When the Klipper [dragonbreath] helper is installed it is the active
-            // manual controller; AUTO must not also drive the heater (two pieces of
-            // software cannot own the target). AUTO stays armed but never engages
-            // while the helper is present — the helper's commands drive POWER_ON
-            // instead. Remove the helper and AUTO resumes on the next tick.
-            s.auto_engaged = (!s.klipper_helper_present
-                              && s.mk_connected && s.src_target_c > 0.0f);
-            if (s.auto_engaged != was_engaged)
+            bool was_bed_engaged = s.auto_bed_engaged;
+            bool can_auto = !s.klipper_helper_present && s.mk_connected;
+
+            if (!can_auto || !s.params.auto_bed_trigger_enable) {
+                s.auto_bed_engaged = false;
+            } else if (!s.auto_bed_engaged
+                       && s.bed_target_c >= s.auto_bed_threshold_c) {
+                s.auto_bed_engaged = true;
+            } else if (s.auto_bed_engaged
+                       && s.bed_target_c < s.auto_bed_threshold_c
+                                             - PB_AUTO_BED_HYSTERESIS_C) {
+                s.auto_bed_engaged = false;
+            }
+
+            bool filament_engaged = can_auto && s.src_target_c > 0.0f;
+            s.auto_engaged = filament_engaged || s.auto_bed_engaged;
+
+            if (s.auto_engaged != was_engaged
+                    || s.auto_bed_engaged != was_bed_engaged)
                 revision_advance_locked(s.source);
+
+            if (s.auto_bed_engaged != was_bed_engaged) {
+                ESP_LOGI(TAG, "AUTO bed preheat %s (bed setpoint %.1fC, threshold %.1fC)",
+                         s.auto_bed_engaged ? "ENGAGED" : "released",
+                         (double)s.bed_target_c, (double)s.auto_bed_threshold_c);
+            }
+
             if (s.auto_engaged) {
-                target = s.src_target_c;
+                target = filament_engaged ? s.src_target_c
+                                          : s.requested_target_c;
                 autonomous = true;
             }
             break;
@@ -1151,6 +1269,8 @@ void pb_policy_get_snapshot(pb_policy_snapshot_t *out)
     out->klipper_helper_present = s.klipper_helper_present;
     out->auto_blocked_by_helper = (s.mode == PB_MODE_AUTO && s.klipper_helper_present);
     out->auto_bed_threshold_c = s.auto_bed_threshold_c;
+    out->auto_bed_trigger_enable = s.params.auto_bed_trigger_enable;
+    out->auto_bed_trigger_active = s.auto_bed_engaged;
     out->params = s.params;
     out->drying = s.mode == PB_MODE_DRYING;
     if (out->drying && s.drying_deadline_us > now) {

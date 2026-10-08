@@ -31,6 +31,8 @@ static const char *TAG = "pb_ha";
 #define KEY_USER  "ha_user"
 #define KEY_PASS  "ha_pass"
 #define KEY_TOPIC "ha_topic"
+#define KEY_TELEMETRY "ha_tel"
+#define KEY_CONTROL "ha_ctl"
 
 #define DEFAULT_PORT     1883
 #define DEFAULT_PREFIX   "dragonbreath"
@@ -87,6 +89,16 @@ static esp_err_t nvs_load(pb_ha_config_t *out)
     sz = sizeof(out->user);  nvs_get_str(h, KEY_USER, out->user, &sz);
     sz = sizeof(out->pass);  nvs_get_str(h, KEY_PASS, out->pass, &sz);
     sz = sizeof(out->topic); nvs_get_str(h, KEY_TOPIC, out->topic, &sz);
+
+    // R4 migration: R3 always published HA telemetry and allowed HA control
+    // alongside Bambu. Missing keys therefore migrate to both boxes checked.
+    uint8_t telemetry = 1;
+    uint8_t control = 1;
+    if (nvs_get_u8(h, KEY_TELEMETRY, &telemetry) != ESP_OK) telemetry = 1;
+    if (nvs_get_u8(h, KEY_CONTROL, &control) != ESP_OK) control = 1;
+    out->telemetry_enabled = telemetry != 0;
+    out->allow_sidecar_control = control != 0;
+
     nvs_close(h);
     return ESP_OK;
 }
@@ -101,6 +113,8 @@ static esp_err_t nvs_save(const pb_ha_config_t *cfg)
     if (err == ESP_OK) err = nvs_set_str(h, KEY_USER, cfg->user);
     if (err == ESP_OK) err = nvs_set_str(h, KEY_PASS, cfg->pass);
     if (err == ESP_OK) err = nvs_set_str(h, KEY_TOPIC, cfg->topic);
+    if (err == ESP_OK) err = nvs_set_u8(h, KEY_TELEMETRY, cfg->telemetry_enabled ? 1 : 0);
+    if (err == ESP_OK) err = nvs_set_u8(h, KEY_CONTROL, cfg->allow_sidecar_control ? 1 : 0);
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
     return err;
@@ -140,6 +154,33 @@ static void stop_heat(void)
     ESP_LOGI(TAG, "HA -> off");
 }
 
+// PERSONAL_BAMBU_HA_CONTROL:
+// Re-arm DragonBreath AUTO from Home Assistant while Bambu remains the selected
+// printer/environment source. AUTO parameters come from the same persisted policy
+// values used by the device UI/buttons; HA does not inject printer/bed/filament data.
+static void start_auto(void)
+{
+    pb_policy_params_t params;
+    pb_policy_get_params(&params);
+
+    pb_policy_result_t r = pb_policy_set_auto(
+        params.auto_target_c,
+        params.auto_bed_threshold_c,
+        DB_SOURCE_WEB,
+        PB_POLICY_REVISION_ANY);
+
+    if (r == PB_POLICY_OK) {
+        // pb_policy_set_auto() invalidates any manual POWER_ON lease. Drop our
+        // process-local lease copy immediately instead of waiting for heartbeat.
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_have_lease = false;
+        xSemaphoreGive(s_lock);
+        ESP_LOGI(TAG, "HA -> auto (Bambu remains printer/AUTO source)");
+    } else {
+        ESP_LOGW(TAG, "HA auto rejected (policy result %d)", (int)r);
+    }
+}
+
 static void handle_cmd(const char *topic, int tlen, const char *data, int dlen)
 {
     char t[96];
@@ -160,12 +201,76 @@ static void handle_cmd(const char *topic, int tlen, const char *data, int dlen)
             tgt = s_desired_target;
             xSemaphoreGive(s_lock);
             start_heat(tgt);
+        } else if (strcmp(d, "auto") == 0) {
+            start_auto();
         } else {   // "off" (or anything else -> safer off)
             stop_heat();
         }
     } else if (strcmp(t, temp_set) == 0) {
         float tgt = strtof(d, NULL);
-        if (tgt > 0) start_heat(tgt);   // setting a target implies heat-on
+        if (tgt > 0) {
+            // PERSONAL_R8_AUTO_TARGET_SLIDER:
+            // AUTO target changes remain configuration-only and stay AUTO.
+            //
+            // PERSONAL_R9_OFF_SETPOINT_ONLY:
+            // OFF target changes update the remembered MANUAL setpoint only.
+            // They MUST NOT start heat, change mode, or create a control lease.
+            pb_policy_snapshot_t snap;
+            pb_policy_get_snapshot(&snap);
+
+            if (snap.mode == PB_MODE_AUTO) {
+                pb_policy_params_t params;
+                pb_policy_get_params(&params);
+
+                pb_policy_result_t r = pb_policy_set_auto_preheat_config(
+                    tgt,
+                    params.auto_bed_threshold_c,
+                    params.auto_bed_trigger_enable);
+
+                if (r == PB_POLICY_OK) {
+                    pb_policy_get_params(&params);
+
+                    xSemaphoreTake(s_lock, portMAX_DELAY);
+                    s_desired_target = params.auto_target_c;
+                    s_have_lease = false;
+                    s_pub_pending = true;
+                    xSemaphoreGive(s_lock);
+
+                    ESP_LOGI(TAG,
+                             "HA -> AUTO target %.0f C (mode stays AUTO)",
+                             (double)params.auto_target_c);
+                } else {
+                    ESP_LOGW(TAG,
+                             "HA AUTO target %.0f C rejected (policy result %d)",
+                             (double)tgt, (int)r);
+                }
+            } else if (snap.mode == PB_MODE_OFF) {
+                pb_policy_result_t r = pb_policy_set_manual_target_config(tgt);
+
+                if (r == PB_POLICY_OK) {
+                    pb_policy_params_t params;
+                    pb_policy_get_params(&params);
+
+                    xSemaphoreTake(s_lock, portMAX_DELAY);
+                    s_desired_target = params.manual_target_c;
+                    s_have_lease = false;
+                    s_pub_pending = true;
+                    xSemaphoreGive(s_lock);
+
+                    ESP_LOGI(TAG,
+                             "HA -> manual target %.0f C while OFF "
+                             "(mode stays OFF; heater unchanged)",
+                             (double)params.manual_target_c);
+                } else {
+                    ESP_LOGW(TAG,
+                             "HA OFF target %.0f C rejected (policy result %d)",
+                             (double)tgt, (int)r);
+                }
+            } else {
+                // Manual HEAT retains the existing live target-update behavior.
+                start_heat(tgt);
+            }
+        }
     }
 }
 
@@ -176,6 +281,24 @@ static void publish_discovery(void)
     const char *p = prefix();
     char buf[1024];
     char topic[96];
+
+
+    // PERSONAL_R7_CLEAR_R5_DISCOVERY:
+    // R5 temporarily replaced the native climate entity with generic Number/
+    // Select controls and raw Celsius sensors.  R7 restores the R4 climate
+    // entity, so clear those retained discovery records once connected.
+    const char *r5_cleanup_topics[] = {
+        "homeassistant/number/%s_target_c/config",
+        "homeassistant/select/%s_mode_control/config",
+        "homeassistant/sensor/%s_chamber_c/config",
+        "homeassistant/sensor/%s_element_c/config",
+        "homeassistant/sensor/%s_target_c_ro/config",
+        "homeassistant/sensor/%s_mode_ro/config",
+    };
+    for (size_t i = 0; i < sizeof(r5_cleanup_topics) / sizeof(r5_cleanup_topics[0]); ++i) {
+        snprintf(topic, sizeof topic, r5_cleanup_topics[i], p);
+        dc_mqtt_publish(s_client, topic, "", 0, 1, true);
+    }
 
     // Climate entity (controllable thermostat) — only in full-control mode. In
     // read-only mode we publish an EMPTY retained payload to the same config topic so
@@ -199,7 +322,7 @@ static void publish_discovery(void)
             // Celsius. HA converts for display and converts a user's setpoint (e.g. °F on
             // an imperial system) back to °C before publishing to temp_cmd_t.
             "\"temp_unit\":\"C\","
-            "\"modes\":[\"off\",\"heat\"],\"min_temp\":20,\"max_temp\":70,\"temp_step\":1,"
+            "\"modes\":[\"off\",\"heat\",\"auto\"],\"min_temp\":20,\"max_temp\":70,\"temp_step\":1,"
             "\"dev\":{\"ids\":[\"%s\"],\"name\":\"DragonBreath\",\"mdl\":\"Panda Breath\",\"mf\":\"DragonBreath\"}}",
             p, p, p, p, p, p, p, p);
         if (cfg > 0 && cfg < (int)sizeof buf)
@@ -256,12 +379,31 @@ static void publish_state(void)
     char cb[16], pb[16];
     if (isfinite(snap.chamber_c)) snprintf(cb, sizeof cb, "%.1f", snap.chamber_c); else strcpy(cb, "null");
     if (isfinite(snap.ptc_c))     snprintf(pb, sizeof pb, "%.1f", snap.ptc_c);     else strcpy(pb, "null");
-    const char *mode = (snap.mode == PB_MODE_OFF) ? "off" : "heat";
+    const char *mode =
+        (snap.mode == PB_MODE_OFF)  ? "off"  :
+        (snap.mode == PB_MODE_AUTO) ? "auto" :
+                                      "heat";
+
+    // In AUTO waiting, the effective heater target is intentionally 0 C. For HA,
+    // report the armed AUTO setpoint instead so the climate target doesn't appear
+    // as 32 F / 0 C while AUTO is simply waiting for Bambu's trigger. Once AUTO
+    // engages, publish the effective target (including a filament-zone override).
+    float ha_target_c = snap.effective_target_c;
+    if (snap.mode == PB_MODE_AUTO && ha_target_c <= 0.0f) {
+        ha_target_c = snap.requested_target_c;
+    } else if (snap.mode == PB_MODE_OFF) {
+        // PERSONAL_R9_OFF_SETPOINT_ONLY:
+        // OFF has no effective heater target, but HA should still display the
+        // remembered MANUAL setpoint that will be used when HEAT is selected.
+        pb_policy_params_t params;
+        pb_policy_get_params(&params);
+        ha_target_c = params.manual_target_c;
+    }
 
     char buf[160];
     snprintf(buf, sizeof buf,
         "{\"chamber\":%s,\"ptc\":%s,\"target\":%.0f,\"mode\":\"%s\",\"fan\":%u}",
-        cb, pb, (double)snap.effective_target_c, mode, (unsigned)snap.effective_fan_percent);
+        cb, pb, (double)ha_target_c, mode, (unsigned)snap.effective_fan_percent);
 
     char topic[80];
     snprintf(topic, sizeof topic, "%s/state", prefix());
@@ -454,6 +596,8 @@ esp_err_t pb_ha_clear_config(void)
     nvs_erase_key(h, KEY_USER);
     nvs_erase_key(h, KEY_PASS);
     nvs_erase_key(h, KEY_TOPIC);
+    nvs_erase_key(h, KEY_TELEMETRY);
+    nvs_erase_key(h, KEY_CONTROL);
     nvs_commit(h);
     nvs_close(h);
     return ESP_OK;

@@ -5,10 +5,12 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 httpd="$root/components/pb_httpd/pb_httpd.c"
 adapter="$root/components/db_portal/db_portal.c"
 core_portal="$root/managed_components/dc_portal/dc_portal.c"
-# The dashboard/control UI is supplied by the pinned dragon-core dc_ui component.
+# The custom fork vendors dc_ui locally; retain managed/sibling fallbacks so this
+# contract check also remains useful against an upstream-style checkout.
 portal="${DC_UI_HTML:-}"
 if [ -z "$portal" ]; then
     for candidate in \
+        "$root/components/dc_ui/www/app.html" \
         "$root/managed_components/dc_ui/www/app.html" \
         "$root/../dragon-core/components/dc_ui/www/app.html"
     do
@@ -16,7 +18,7 @@ if [ -z "$portal" ]; then
     done
 fi
 if [ ! -f "$portal" ]; then
-    echo "dc_ui SPA not found; run the ESP-IDF dependency build first" >&2
+    echo "dc_ui SPA not found (local vendor, managed component, or sibling dragon-core)" >&2
     exit 1
 fi
 
@@ -62,7 +64,8 @@ grep -q 'id="d-action"' "$portal"                    # Dry: primary action prese
 grep -q 'id="a-msg"' "$portal"                       # Automatic: command feedback line present
 grep -q 'id="d-msg"' "$portal"                       # Dry: command feedback line present
 grep -q 'if(ui.schema!=null && ui.schema!==1) return' "$portal" # unknown UI schema degrades safely
-grep -q "command('auto', {target_c:fields.autoT.val" "$portal"         # auto sends the user's target+threshold
+grep -q "target_c:fields.autoT.val" "$portal"                       # AUTO sends the user's target
+grep -q "bed_threshold_c:fields.autoB.val" "$portal"                    # AUTO sends the user's bed threshold
 grep -q "command('drying_start', {target_c:fields.dryT.val" "$portal"  # dry sends the user's target+hours
 grep -q "Rejected: '+" "$portal"                     # command rejection surfaced to the user
 grep -q 'strcmp(s_replay\[i\].actor_id, actor_id)' "$httpd"
@@ -112,7 +115,10 @@ done
 # supplies API registration, authorization, heater safety and image identity.
 grep -q 'dc_portal_start(&cfg)' "$adapter"
 grep -q 'pb_httpd_register(server)' "$adapter"
-grep -q 'snap.mode == PB_MODE_OFF && !snap.heater_output' "$adapter"
+grep -q '!snap.heater_demand && !snap.heater_output' "$adapter" || {
+    echo "maintenance guard no longer allows idle AUTO while blocking active heat" >&2
+    exit 1
+}
 grep -q 'panda_breath' "$adapter"
 grep -q '\.uri = "/km-config"' "$adapter" || {
     echo "shipped Klipper-MQTT config generator route is missing" >&2
