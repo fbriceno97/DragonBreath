@@ -541,13 +541,13 @@ pb_policy_result_t pb_policy_set_power_on(
     s.auto_engaged = false;
     s.drying_deadline_us = 0;
 
-    // DragonBreath GUI + Home Assistant both originate as DB_SOURCE_WEB. Give
-    // those manual sessions an absolute firmware-side deadline independent of
-    // heartbeats. Klipper/manual-controller sessions keep their existing lease
-    // behavior and are not capped by this personal GUI/HA preference.
+    // DragonBreath GUI + Home Assistant originate as DB_SOURCE_WEB; the physical
+    // ON button is DB_SOURCE_BUTTON. Give those human manual sessions an absolute
+    // firmware-side deadline independent of heartbeats. Klipper automation keeps
+    // its existing lease behavior and is not capped by this personal manual timer.
     if (continuing_session) {
         s.manual_power_deadline_us = prior_deadline;
-    } else if (source == DB_SOURCE_WEB) {
+    } else if (source == DB_SOURCE_WEB || source == DB_SOURCE_BUTTON) {
         s.manual_power_deadline_us =
             now + (int64_t)s.params.manual_timeout_min * 60 * 1000000;
     } else {
@@ -1310,7 +1310,7 @@ void pb_policy_tick(void)
     pb_leds_set(PB_LED_DRY, s.mode == PB_MODE_DRYING ? PB_LED_SOLID : PB_LED_OFF);
 
     if (local_limit_expired)
-        ESP_LOGW(TAG, "manual WEB/HA shutdown timer expired; mode set OFF");
+        ESP_LOGW(TAG, "manual shutdown timer expired; mode set OFF");
     xSemaphoreGive(s_lock);
 }
 
