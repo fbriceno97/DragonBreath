@@ -21,8 +21,9 @@
 // Remote POWER_ON leases follow pb_heater's runtime-configurable comms deadman,
 // so the advertised lease runway and the hardware watchdog cannot disagree.
 //
-// Personal manual-session guard: WEB-origin manual heat (DragonBreath GUI and HA
-// sidecar both use DB_SOURCE_WEB) also has an absolute firmware-side timeout.
+// Personal manual-session guard: human-started manual heat (DragonBreath GUI,
+// Home Assistant sidecar, and the front-panel ON button) has an absolute
+// firmware-side timeout.
 // Default 30 min; the explicit "extended" preference raises only the selectable
 // ceiling to 60 min. The timer is independent of controller heartbeats.
 #define PB_POLICY_MANUAL_TIMEOUT_MIN_MIN      5U
@@ -69,7 +70,7 @@ typedef struct {
 // runtime-configured maximum when loaded.
 typedef struct {
     float manual_target_c;        // last accepted POWER_ON target
-    uint8_t manual_timeout_min;    // WEB manual session absolute timeout, minutes
+    uint8_t manual_timeout_min;    // human manual-session absolute timeout, minutes
     bool manual_timeout_extended; // allow selecting >30 min, up to 60; default false
     float auto_target_c;          // last accepted AUTO target
     float auto_bed_threshold_c;   // last accepted AUTO bed threshold
