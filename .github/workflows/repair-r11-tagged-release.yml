@@ -1,0 +1,72 @@
+name: repair-r11-tagged-release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/repair-r11-tagged-release.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-r11-tagged-release
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout exact R11 tag
+        env:
+          VERSION: v1.1.19-r11
+        run: |
+          set -eux
+          git fetch --tags --force
+          git checkout --detach "refs/tags/$VERSION"
+          test "$(git describe --tags --exact-match)" = "$VERSION"
+          echo "Building exact tagged source: $(git rev-parse HEAD) / $(git describe --tags --exact-match)"
+
+      - name: Build tagged R11 firmware (ESP-IDF v5.3.5)
+        uses: espressif/esp-idf-ci-action@9d38657f3d789ca759b2b37aaf5ceffbc42c4f0d # v1
+        with:
+          esp_idf_version: v5.3.5
+          target: esp32c3
+          path: '.'
+          command: idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" build
+
+      - name: Package tagged R11
+        env:
+          VERSION: v1.1.19-r11
+          IDF_VERSION: v5.3.5
+        run: |
+          set -eux
+          export SOURCE_SHA="$(git rev-parse HEAD)"
+          pipx install esptool >/dev/null 2>&1 \
+            || pip install --user esptool \
+            || pip install --user --break-system-packages esptool
+          export PATH="$HOME/.local/bin:$PATH"
+          ./tools/package_release.sh
+          test -f "dist/dragonbreath-$VERSION.bin"
+
+      - name: Replace R11 release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: v1.1.19-r11
+        run: |
+          set -eux
+          gh release upload "$VERSION" --clobber \
+            "dist/dragonbreath-$VERSION.bin" \
+            dist/manifest.json \
+            dist/SHA256SUMS.txt
+          notes="$(gh release view "$VERSION" --json body --jq .body)"
+          if ! printf '%s' "$notes" | grep -q 'exact release tag'; then
+            printf '%s\n\n%s\n' "$notes" \
+              "**Release repair:** assets rebuilt from the exact release tag so the firmware identifies itself as `$VERSION` instead of a commit hash." \
+              > /tmp/notes.md
+            gh release edit "$VERSION" --notes-file /tmp/notes.md
+          fi
