@@ -1,0 +1,73 @@
+name: r11-one-time-release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/r11-one-time-release.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: r11-one-time-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Build release firmware (ESP-IDF v5.3.5)
+        uses: espressif/esp-idf-ci-action@9d38657f3d789ca759b2b37aaf5ceffbc42c4f0d # v1
+        with:
+          esp_idf_version: v5.3.5
+          target: esp32c3
+          path: '.'
+          command: idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" build
+
+      - name: Package R11
+        env:
+          VERSION: v1.1.19-r11
+          SOURCE_SHA: ${{ github.sha }}
+          IDF_VERSION: v5.3.5
+        run: |
+          pipx install esptool >/dev/null 2>&1 \
+            || pip install --user esptool \
+            || pip install --user --break-system-packages esptool
+          export PATH="$HOME/.local/bin:$PATH"
+          ./tools/package_release.sh
+
+      - name: Publish R11 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: v1.1.19-r11
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "$VERSION already exists; leaving it unchanged."
+            exit 0
+          fi
+          cat > /tmp/notes.md <<'EOF'
+          DragonBreath R11 hotfix.
+
+          Includes all R10 network-hardening changes plus the blank-web-UI fix:
+          - fixes the post-boot Wi-Fi reconnect dead-end
+          - keeps runtime reconnects paced and indefinite
+          - disables ESP32 modem power saving on Panda Breath
+          - disables periodic ESP-NOW peer broadcasts
+          - preserves explicit stored AP mode settings
+          - restores the embedded SPA length calculation so the web GUI renders normally
+          - adds a CI invariant to prevent the zero-length UI regression from returning
+
+          Install on an existing DragonBreath unit by uploading the application image through the DragonBreath firmware update page.
+          EOF
+          gh release create "$VERSION" \
+            --target "${GITHUB_SHA}" \
+            --title "$VERSION" \
+            --notes-file /tmp/notes.md \
+            "dist/dragonbreath-${VERSION}.bin" \
+            dist/manifest.json \
+            dist/SHA256SUMS.txt
