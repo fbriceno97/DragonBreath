@@ -524,7 +524,9 @@ pb_policy_result_t pb_policy_set_power_on(
     // update, not a new session. Preserve the absolute manual shutdown deadline so
     // moving a slider cannot silently restart the clock.
     bool continuing_session =
-        s.mode == PB_MODE_POWER_ON && s.manual_power_deadline_us > now;
+        s.mode == PB_MODE_POWER_ON
+        && s.manual_power_deadline_us > now
+        && (source == DB_SOURCE_WEB || source == DB_SOURCE_BUTTON);
 
     // #72: a manual run started while AUTO is a one-off override — remember to
     // return to AUTO "waiting" when it is explicitly stopped from the ON button.
