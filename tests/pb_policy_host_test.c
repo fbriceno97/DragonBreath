@@ -665,6 +665,12 @@ static void test_web_manual_timer_survives_heartbeats_and_target_updates(void)
     CHECK(snap.manual_remaining_s == 60);
     CHECK(snap.requested_target_c == 55.0f);
 
+    // Changing the saved timer while already heating is NEXT-session config only.
+    CHECK(pb_policy_set_manual_timeout_config(60, true) == PB_POLICY_OK);
+    snap = snapshot();
+    CHECK(snap.manual_remaining_s == 60);              // current deadline unchanged
+    CHECK(snap.params.manual_timeout_min == 60);       // next run will use 60
+
     // Keep the replacement lease healthy past the original five-minute mark.
     fake_now_us += 60LL * 1000000 + 1;
     CHECK(pb_policy_heartbeat(&second) == PB_POLICY_OK);
