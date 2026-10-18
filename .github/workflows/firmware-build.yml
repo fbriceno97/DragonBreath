@@ -83,6 +83,9 @@ jobs:
       - name: Check R10 network hardening invariants
         run: sh tests/check_network_hardening.sh
 
+      - name: Check embedded UI asset invariant
+        run: sh tests/check_ui_asset.sh
+
       # E1 static analysis: cppcheck over OUR OWN code (components/ + main/). Fails on
       # any error/warning/performance/portability finding (--error-exitcode). The C
       # `error` checks are always on. False positives cppcheck's parser cannot model
