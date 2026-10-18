@@ -8,6 +8,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to embed in the dry-run firmware (for example v1.1.19-r12)'
+        required: true
+        type: string
 
 # Least-privilege: only the release job needs write, to create the Release.
 permissions:
@@ -31,7 +36,11 @@ jobs:
           if [ "${{ github.ref_type }}" = "tag" ]; then
             V="${{ github.ref_name }}"
           else
-            V="$(git describe --tags --always --dirty)"
+            V="${{ inputs.version }}"
+            case "$V" in
+              v*) ;;
+              *) echo "workflow_dispatch version must start with v" >&2; exit 2 ;;
+            esac
           fi
           echo "version=$V" | tee -a "$GITHUB_OUTPUT"
 
@@ -44,7 +53,7 @@ jobs:
           # Release builds layer sdkconfig.release on top of the defaults to enable
           # CONFIG_PB_POWER_LED (drives the front-panel Power LED on GPIO21, giving up
           # console TX). Dev builds (plain `idf.py build`) omit it and keep the console.
-          command: idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" build
+          command: idf.py -DDB_VERSION_OVERRIDE="${{ steps.ver.outputs.version }}" -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" build
 
       - name: Package release artifacts
         env:
@@ -58,6 +67,9 @@ jobs:
             || pip install --user --break-system-packages esptool
           export PATH="$HOME/.local/bin:$PATH"
           ./tools/package_release.sh
+          # Fail the release if the requested version string did not make it into
+          # the compiled application image.
+          grep -aF -- "${VERSION}" build/dragonbreath.bin >/dev/null
 
       - name: Publish GitHub Release
         env:
@@ -73,7 +85,7 @@ jobs:
           ' CHANGELOG.md 2>/dev/null || true)"
           install="$(cat <<EOF
           **Install (no USB — recommended):** on the stock Panda web UI ("Firmware Update"), upload \`dragonbreath-${VERSION}.bin\`. It installs as an app through the stock firmware's own OTA — the stock bootloader/partitions stay in place, so you can revert to Panda later over WiFi.
-          **Update / revert (already on DragonBreath):** upload \`dragonbreath-${VERSION}.bin\` via \`/fw\`; to return to Panda, upload your stock backup's **app** image via \`/fw\`.
+          **Update / revert (already on DragonBreath):** upload \`dragonbreath-${VERSION}.bin\` via Device setup or POST \`/api/v1/system/update\`; to return to Panda, upload your stock backup's **app** image via \`/fw\`.
           **Recovery only (USB):** from a source checkout, \`python3 tools/flash.py\` (backs up stock first). The full/factory image is not published — build it locally if you need it.
 
           > **Alpha/beta testers:** if your unit was USB-flashed, **restore your stock backup first, then install this via the stock updater** — a stock-layout install can't be reached by OTA from a native-layout one.
