@@ -3,8 +3,14 @@ cmake_minimum_required(VERSION 3.16)
 # Shared board-agnostic services come from justinh-rahb/dragon-core through the
 # ESP-IDF component manager. Product-specific pb_* components remain local.
 # App version stamped into the ESP app descriptor (esp_app_get_description()->version,
-# also shown in the web UI): the exact git tag when HEAD is tagged (releases), else
-# the short commit hash (PR / local builds), with "-dirty" if the tree is modified.
+# also shown in the web UI). Release CI passes DB_VERSION_OVERRIDE explicitly so the
+# binary version cannot depend on whether a tag happened to exist before compilation.
+# Without an override: exact git tag when HEAD is tagged, else short commit hash.
+if(DEFINED DB_VERSION_OVERRIDE AND NOT DB_VERSION_OVERRIDE STREQUAL "")
+    set(PROJECT_VER "${DB_VERSION_OVERRIDE}")
+    set(DB_TAG_RC 0)
+    set(DB_TAG "${DB_VERSION_OVERRIDE}")
+else()
 execute_process(
     COMMAND git describe --tags --exact-match
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -29,6 +35,7 @@ else()
     else()
         set(PROJECT_VER "${DB_HASH}")
     endif()
+endif()
 endif()
 message(STATUS "DragonBreath version: ${PROJECT_VER}")
 
