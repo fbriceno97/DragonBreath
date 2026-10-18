@@ -11,7 +11,7 @@ dc_ui_asset_t dc_ui_spa_asset(void)
 {
     return (dc_ui_asset_t) {
         .data = dc_ui_app_html_gz_start,
-        .len = (size_t)(dc_ui_app_html_gz_end - dc_ui_app_html_gz_start),
+        // cppcheck-suppress comparePointers -- linker symbols bound one embedded blob\n        .len = (size_t)(dc_ui_app_html_gz_end - dc_ui_app_html_gz_start),
         .content_type = "text/html; charset=utf-8",
         .content_encoding = "gzip",
     };
