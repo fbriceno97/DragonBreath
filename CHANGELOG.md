@@ -26,6 +26,12 @@ below into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+- Add a persisted **Manual shutdown timer** for human-started manual HEAT. The normal range is **5–30 minutes** (default 30); an explicit, default-off **Allow up to 60 minutes** option unlocks 31–60 minute values such as 33 minutes.
+- The timer is enforced in DragonBreath firmware for manual HEAT started from the web GUI, Home Assistant, or the front-panel ON button. Home Assistant/MQTT heartbeats cannot extend it, and target changes during a run do not restart the countdown.
+- Manual timer expiry is a normal hard OFF (not a fault) and never falls back into AUTO; the existing cooldown purge still runs if required. The live API/UI exposes remaining manual time. Klipper automation keeps its existing lease/deadman behavior and is not capped by this personal manual timer.
+
+
 ## [1.1.19-r9] - 2026-10-08
 
 Custom fork based on DragonBreath v1.1.19.
