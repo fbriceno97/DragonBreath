@@ -521,7 +521,7 @@ pb_policy_result_t pb_policy_set_power_on(
 
     int64_t now = esp_timer_get_time();
     // A repeated POWER_ON while already in manual heat is a target/controller
-    // update, not a new session. Preserve the absolute WEB/HA shutdown deadline so
+    // update, not a new session. Preserve the absolute manual shutdown deadline so
     // moving a slider cannot silently restart the clock.
     bool continuing_session =
         s.mode == PB_MODE_POWER_ON && s.manual_power_deadline_us > now;
@@ -1114,7 +1114,7 @@ void pb_policy_tick(void)
             if (s.manual_power_deadline_us > 0
                     && now >= s.manual_power_deadline_us) {
                 local_limit_expired = true;
-                // Absolute WEB/HA manual-session timer: hard OFF. Do not restore
+                // Absolute human manual-session timer: hard OFF. Do not restore
                 // AUTO, otherwise an active printer condition could immediately
                 // re-energize heat and defeat the forgotten-heater guard.
                 set_off_locked(DB_SOURCE_WATCHDOG);
@@ -1127,9 +1127,12 @@ void pb_policy_tick(void)
                 // common reason a manual web session "drops off." s.source still
                 // holds the controlling source here; the trip overwrites it to
                 // WATCHDOG afterward.
-                watchdog_reason = (s.source == DB_SOURCE_WEB)
-                    ? "Web controller lease expired - browser tab may be backgrounded"
-                    : "controller lease expired";
+                if (s.source == DB_SOURCE_WEB && strcmp(s.lease_owner, "ha") == 0)
+                    watchdog_reason = "Home Assistant controller lease expired";
+                else if (s.source == DB_SOURCE_WEB)
+                    watchdog_reason = "Web controller lease expired - browser tab may be backgrounded";
+                else
+                    watchdog_reason = "controller lease expired";
             } else {
                 target = s.requested_target_c;
                 autonomous = !s.lease_active;
