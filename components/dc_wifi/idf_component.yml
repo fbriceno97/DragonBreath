@@ -1,0 +1,6 @@
+version: "0.35.2"
+description: Product-configurable Wi-Fi, AP provisioning, scanning, and mDNS
+license: MIT
+dependencies:
+  idf: ">=5.3"
+  espressif/mdns: "^1.4.0"
