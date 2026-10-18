@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions are the
 firmware release tags (`vX.Y.Z`). The release workflow pulls the matching section
 below into the GitHub Release notes.
 
+## [1.1.19-r11] - 2026-10-18
+
+### Hotfix
+
+- Fix the blank DragonBreath web UI in R10. A malformed cppcheck-suppression edit accidentally commented out the embedded SPA length initializer, causing the HTTP server to send a zero-length page.
+- Add a CI source invariant so the embedded UI asset length cannot silently disappear again.
+
 ## [1.1.19-r10] - 2026-10-18
 
 ### Network hardening
