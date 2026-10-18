@@ -46,3 +46,8 @@ CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
 # stops accepting connections (pings fine, HTTP dead) — recovering only when the
 # print stops. 16 gives httpd real concurrency headroom during a print.
 CONFIG_LWIP_MAX_SOCKETS=16
+
+
+# One-shot R12 release-build branch: match sdkconfig.release for the normal CI
+# artifact. HIL/debug overlays explicitly disable this symbol.
+CONFIG_PB_POWER_LED=y
