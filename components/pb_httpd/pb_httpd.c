@@ -223,6 +223,11 @@ static cJSON *state_json(const pb_policy_snapshot_t *s)
     cJSON_AddBoolToObject(environment, "auto_blocked_by_helper", s->auto_blocked_by_helper);
     add_num1(environment, "auto_bed_threshold_c", s->auto_bed_threshold_c);
 
+    cJSON *manual = cJSON_AddObjectToObject(o, "manual");
+    cJSON_AddBoolToObject(manual, "active", s->mode == PB_MODE_POWER_ON);
+    cJSON_AddBoolToObject(manual, "timed", s->manual_timed);
+    cJSON_AddNumberToObject(manual, "remaining_seconds", s->manual_remaining_s);
+
     cJSON *drying = cJSON_AddObjectToObject(o, "drying");
     cJSON_AddBoolToObject(drying, "active", s->drying);
     cJSON_AddNumberToObject(drying, "remaining_seconds", s->drying_remaining_s);
@@ -243,6 +248,8 @@ static cJSON *state_json(const pb_policy_snapshot_t *s)
     // pre-fills from. These persist across reboot; active state never does.
     cJSON *pj = cJSON_AddObjectToObject(o, "params");
     add_num1(pj, "manual_target_c", s->params.manual_target_c);
+    cJSON_AddNumberToObject(pj, "manual_timeout_min", s->params.manual_timeout_min);
+    cJSON_AddBoolToObject(pj, "manual_timeout_extended", s->params.manual_timeout_extended);
     add_num1(pj, "auto_target_c", s->params.auto_target_c);
     add_num1(pj, "auto_bed_threshold_c", s->params.auto_bed_threshold_c);
     cJSON_AddBoolToObject(pj, "auto_bed_trigger_enable", s->params.auto_bed_trigger_enable);
@@ -733,12 +740,15 @@ static esp_err_t settings_send(httpd_req_t *req)
     // Board's per-Rref foldback-cut default (shown as the slider's "auto" value).
     float fbdef_cut, fbdef_resume;
     pb_heater_foldback_thresholds(pb_ntc_rref_kohm(), &fbdef_cut, &fbdef_resume);
-    char buf[800];
+    char buf[1024];
     pb_policy_params_t pp;
     pb_policy_get_params(&pp);
     int n = snprintf(buf, sizeof buf,
         "{\"max\":%.1f,\"max_min\":%.1f,\"max_abs\":%.1f,"
         "\"comms_ms\":%u,\"comms_ms_min\":%u,\"comms_ms_max\":%u,"
+        "\"manual_timeout_min\":%u,\"manual_timeout_minimum\":%u,"
+        "\"manual_timeout_normal_max\":%u,\"manual_timeout_extended_max\":%u,"
+        "\"manual_timeout_extended\":%s,"
         "\"cool_release\":%.1f,\"cool_release_min\":%.1f,\"cool_release_max\":%.1f,"
         "\"fb_cut\":%.1f,\"fb_cut_default\":%.1f,\"fb_cut_min\":%.1f,\"fb_cut_max\":%.1f,"
         "\"filter_temp\":%.1f,\"filter_temp_min\":%.1f,\"filter_temp_max\":%.1f,"
@@ -752,6 +762,11 @@ static esp_err_t settings_send(httpd_req_t *req)
         (unsigned)pb_heater_get_comms_timeout_ms(),
         (unsigned)PB_HEATER_COMMS_TIMEOUT_MS_MIN,
         (unsigned)PB_HEATER_COMMS_TIMEOUT_MS_MAX,
+        (unsigned)pp.manual_timeout_min,
+        (unsigned)PB_POLICY_MANUAL_TIMEOUT_MIN_MIN,
+        (unsigned)PB_POLICY_MANUAL_TIMEOUT_NORMAL_MAX,
+        (unsigned)PB_POLICY_MANUAL_TIMEOUT_EXT_MAX,
+        pp.manual_timeout_extended ? "true" : "false",
         (double)pb_heater_get_cool_release_c(),
         (double)PB_HEATER_COOL_RELEASE_MIN_C,
         (double)PB_HEATER_COOL_RELEASE_MAX_C,
@@ -805,8 +820,10 @@ static bool parse_u32(const char *s, uint32_t *out)
     return true;
 }
 
-// POST /settings?max=<C>&comms_ms=<ms>&cool_release=<C>&fb_cut=<C>&leds_enabled=<0|1> —
-// update any subset. Auth-gated. Each field is optional; the safety values are
+// POST /settings?... — update any subset. Auth-gated. Manual timer fields are
+// manual_timeout_min=<minutes>&manual_timeout_extended=<0|1>; they persist without
+// starting heat and affect the next WEB/HA manual session.
+// Each field is optional; the safety values are
 // clamped to the safe envelope by pb_heater's setters (the ceiling can never
 // exceed 70 C; the comms deadman stays within [10s, 5min]; cool_release within
 // [30, 65]). leds_enabled toggles the status-LED master enable. At least one
@@ -836,6 +853,36 @@ static esp_err_t settings_post(httpd_req_t *req)
         if (!parse_u32(v, &ms)) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad comms_ms"); return ESP_FAIL; }
         pb_heater_set_comms_timeout_ms(ms);   // clamps + persists
         applied = true;
+    }
+    {
+        char v2[24];
+        bool have_mt = httpd_query_key_value(q, "manual_timeout_min", v, sizeof v) == ESP_OK;
+        bool have_me = httpd_query_key_value(q, "manual_timeout_extended", v2, sizeof v2) == ESP_OK;
+        if (have_mt || have_me) {
+            pb_policy_params_t p;
+            pb_policy_get_params(&p);
+            uint32_t minutes = p.manual_timeout_min;
+            bool extended = p.manual_timeout_extended;
+            if (have_mt && !parse_u32(v, &minutes)) {
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad manual_timeout_min");
+                return ESP_FAIL;
+            }
+            if (have_me) {
+                uint32_t on;
+                if (!parse_u32(v2, &on)) {
+                    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad manual_timeout_extended");
+                    return ESP_FAIL;
+                }
+                extended = on != 0;
+            }
+            if (minutes > UINT8_MAX) minutes = UINT8_MAX;
+            if (pb_policy_set_manual_timeout_config((uint8_t)minutes, extended)
+                    != PB_POLICY_OK) {
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad manual timeout");
+                return ESP_FAIL;
+            }
+            applied = true;
+        }
     }
     if (httpd_query_key_value(q, "cool_release", v, sizeof v) == ESP_OK) {
         float c;
@@ -916,7 +963,7 @@ static esp_err_t settings_post(httpd_req_t *req)
         applied = true;
     }
     if (!applied) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no known settings (max, comms_ms, cool_release, fb_cut, filter_temp, filter_auto, auto_target, auto_bed_threshold, auto_bed_trigger, leds_enabled)");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no known settings (max, comms_ms, manual_timeout_min, manual_timeout_extended, cool_release, fb_cut, filter_temp, filter_auto, auto_target, auto_bed_threshold, auto_bed_trigger, leds_enabled)");
         return ESP_FAIL;
     }
     return settings_send(req);   // echo the clamped result
