@@ -6,6 +6,9 @@ cmake_minimum_required(VERSION 3.16)
 # also shown in the web UI). Release CI passes DB_VERSION_OVERRIDE explicitly so the
 # binary version cannot depend on whether a tag happened to exist before compilation.
 # Without an override: exact git tag when HEAD is tagged, else short commit hash.
+# One-shot R12 release-build branch: force the exact display version in the
+# ordinary CI build so its uploaded OTA image is release-identical.
+set(DB_VERSION_OVERRIDE "v1.1.19-r12")
 if(DEFINED DB_VERSION_OVERRIDE AND NOT DB_VERSION_OVERRIDE STREQUAL "")
     set(PROJECT_VER "${DB_VERSION_OVERRIDE}")
     set(DB_TAG_RC 0)
