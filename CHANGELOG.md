@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions are the
 firmware release tags (`vX.Y.Z`). The release workflow pulls the matching section
 below into the GitHub Release notes.
 
+## [1.1.19-r10] - 2026-10-18
+
+### Network hardening
+
+- Fix post-boot Wi-Fi reconnect dead-end after deauthentication/disassociation.
+- Pace runtime reconnects at 5 seconds and keep retrying until the LAN returns.
+- Disable ESP32 modem power saving on Panda Breath.
+- Disable periodic ESP-NOW peer broadcasts on DragonBreath.
+- Default new/unset AP lifecycle to FALLBACK instead of an always-on concurrent AP; persisted AP mode is unchanged.
+- Add disconnect diagnostics (reason, channel, phase, retry state).
+- Vendor the patched `dc_wifi` component from dragon-core v0.35.2 for reproducible builds.
+
 ## [Unreleased]
 
 ## [1.1.19-r9] - 2026-10-08
