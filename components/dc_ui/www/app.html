@@ -751,7 +751,7 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
 
       <!-- Manual: power_on at a chosen chamber target. -->
       <section class="page-only mode-controls" data-page-content="manual" data-capability="power_on">
-        <p><strong>Manual heat:</strong> set a chamber target and heat directly until you stop it.</p>
+        <p><strong>Manual heat:</strong> set a chamber target and heat directly until you stop it or the firmware shutdown timer expires.</p>
         <div class="ctl-group">
           <div class="ctl-head">
             <span class="form-label">Target temperature</span>
@@ -770,6 +770,29 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
           <button class="btn btn-sm" type="button" data-preset="man,60">60 °C</button>
           <button class="btn btn-sm" type="button" data-preset="man,70">70 °C</button>
         </div>
+
+        <div class="ctl-group">
+          <div class="ctl-head">
+            <span class="form-label">Manual shutdown timer</span>
+            <span class="ctl-hint" id="m-time-hint">5–30 min</span>
+          </div>
+          <div class="touch-adjust">
+            <button class="btn step-btn" type="button" id="m-time-minus" aria-label="Decrease manual shutdown timer"><svg class="icon"><use href="#i-minus"/></svg></button>
+            <output class="touch-value" id="m-time-value">30 <span>min</span></output>
+            <button class="btn step-btn" type="button" id="m-time-plus" aria-label="Increase manual shutdown timer"><svg class="icon"><use href="#i-plus"/></svg></button>
+          </div>
+          <input class="form-range" id="m-time-range" type="range" min="5" max="30" step="1" value="30" aria-label="Manual shutdown timer">
+          <label style="display:flex;align-items:center;gap:.55rem;margin-top:.7rem">
+            <input type="checkbox" id="m-time-extended">
+            <span>Allow up to 60 minutes</span>
+          </label>
+          <div class="ctl-hint" style="margin-top:.4rem">
+            Saved immediately in DragonBreath. Applies to manual HEAT started from this GUI, Home Assistant, or the front-panel ON button.
+            Changes made during an active session apply to the next manual run.
+          </div>
+          <div class="mode-feedback" id="m-time-msg" role="status" aria-live="polite"></div>
+        </div>
+
         <div class="mode-status" id="m-status"></div>
         <div class="mode-footer">
           <div class="mode-action"><button class="btn btn-primary btn-block" type="button" id="m-action"><svg class="icon"><use href="#i-play"/></svg> <span>Start heating</span></button></div>
@@ -2652,6 +2675,8 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
   var maxC = 70;                 // runtime target ceiling from state.target.maximum_c
   var prevMode = null;           // clear "touched" on a real mode transition
   var touched = {};
+  var manualTimer = { val:30, min:5, normalMax:30, extMax:60, extended:false };
+  var manualTimerEditing = false;
   var fields = {
     man:   { val:50,  vId:'m-value',       rId:'m-range' },
     autoT: { val:50,  vId:'a-value',       rId:'a-range' },
@@ -2660,6 +2685,36 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
     dryH:  { val:6,   vId:'d-hours-value', rId:'d-hours-range' }
   };
   function fMin(k){ return k==='autoB' ? 40 : k==='dryH' ? 1 : 30; }
+
+  function renderManualTimer(){
+    var max = manualTimer.extended ? manualTimer.extMax : manualTimer.normalMax;
+    manualTimer.val = Math.max(manualTimer.min, Math.min(max, Math.round(manualTimer.val)));
+    var out=$('m-time-value'), range=$('m-time-range'), hint=$('m-time-hint'), ext=$('m-time-extended');
+    if(out && out.firstChild) out.firstChild.textContent=manualTimer.val+' ';
+    if(range){ range.min=manualTimer.min; range.max=max; range.value=manualTimer.val; }
+    if(hint) hint.textContent=manualTimer.min+'–'+max+' min';
+    if(ext) ext.checked=manualTimer.extended;
+  }
+  function saveManualTimer(){
+    renderManualTimer();
+    flash('m-time-msg','Saving…');
+    var url='/settings?manual_timeout_min='+manualTimer.val+
+      '&manual_timeout_extended='+(manualTimer.extended?1:0);
+    request(url,{}).then(function(j){
+      if(j){
+        if(isFinite(j.manual_timeout_min)) manualTimer.val=Math.round(j.manual_timeout_min);
+        if(typeof j.manual_timeout_extended==='boolean') manualTimer.extended=j.manual_timeout_extended;
+        if(isFinite(j.manual_timeout_minimum)) manualTimer.min=Math.round(j.manual_timeout_minimum);
+        if(isFinite(j.manual_timeout_normal_max)) manualTimer.normalMax=Math.round(j.manual_timeout_normal_max);
+        if(isFinite(j.manual_timeout_extended_max)) manualTimer.extMax=Math.round(j.manual_timeout_extended_max);
+      }
+      manualTimerEditing=false; renderManualTimer();
+      flash('m-time-msg','Saved for the next manual HEAT session.','is-ok');
+    }).catch(function(j){
+      manualTimerEditing=false;
+      flash('m-time-msg','Save failed: '+((j&&(j.message||j.error))||'error'),'is-error');
+    });
+  }
   function fMax(k){ return k==='autoB' ? 120 : k==='dryH' ? 12 : maxC; }
   function renderField(k){
     var f=fields[k], v=$(f.vId), r=$(f.rId);
@@ -2690,7 +2745,11 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
   function renderManual(s){
     var run = s.mode==='power_on';
     setAction('m-action', run?'Stop':'Start heating', run?'#i-square':'#i-play', run);
-    if(run) setStatus('m-status', 'Heating to '+Math.round(s.target.effective_c)+' °C.', 'is-live');
+    if(run){
+      var rem = s.manual && s.manual.timed ? Number(s.manual.remaining_seconds||0) : 0;
+      var suffix = rem>0 ? (' · '+Math.max(1,Math.ceil(rem/60))+' min remaining') : '';
+      setStatus('m-status', 'Heating to '+Math.round(s.target.effective_c)+' °C'+suffix+'.', 'is-live');
+    }
     else if(s.safety.inhibited || s.safety.fault_latched) setStatus('m-status', 'Safety chain not ready.', 'is-warn');
     else setStatus('m-status', 'Heater is off.');
   }
@@ -2847,6 +2906,11 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
     if(prevMode!==s.mode){ touched={}; prevMode=s.mode; }   // remote/physical mode change wins
     var pr = s.params||{}, rq = s.target ? s.target.requested_c : null;
     if(!touched.man)   setField('man',   s.mode==='power_on' ? rq : pr.manual_target_c);
+    if(!manualTimerEditing && isFinite(pr.manual_timeout_min)){
+      manualTimer.val=Math.round(pr.manual_timeout_min);
+      manualTimer.extended=!!pr.manual_timeout_extended;
+      renderManualTimer();
+    }
     if(!touched.autoT) setField('autoT', s.mode==='auto'     ? rq : pr.auto_target_c);
     if(!touched.autoB) setField('autoB', s.mode==='auto' ? s.environment.auto_bed_threshold_c : pr.auto_bed_threshold_c);
     if(!touched.dryT)  setField('dryT',  s.mode==='drying'   ? rq : pr.dry_target_c);
@@ -2878,6 +2942,25 @@ svg.icon{ width: 20px; height: 20px; fill: none; stroke: currentColor;
   });
   document.querySelectorAll('[data-preset]').forEach(function(b){
     b.addEventListener('click', function(){ var p=b.dataset.preset.split(','); setField(p[0], Number(p[1]), true); });
+  });
+  if($('m-time-minus')) $('m-time-minus').addEventListener('click', function(){
+    manualTimerEditing=true; manualTimer.val--; saveManualTimer();
+  });
+  if($('m-time-plus')) $('m-time-plus').addEventListener('click', function(){
+    manualTimerEditing=true; manualTimer.val++; saveManualTimer();
+  });
+  if($('m-time-range')){
+    $('m-time-range').addEventListener('input', function(){
+      manualTimerEditing=true; manualTimer.val=Number(this.value); renderManualTimer();
+    });
+    $('m-time-range').addEventListener('change', function(){ saveManualTimer(); });
+  }
+  if($('m-time-extended')) $('m-time-extended').addEventListener('change', function(){
+    manualTimerEditing=true;
+    manualTimer.extended=!!this.checked;
+    if(!manualTimer.extended && manualTimer.val>manualTimer.normalMax)
+      manualTimer.val=manualTimer.normalMax;
+    saveManualTimer();
   });
   document.querySelectorAll('[data-drypreset]').forEach(function(b){
     b.addEventListener('click', function(){ var p=b.dataset.drypreset.split(','); setField('dryT', Number(p[0]), true); setField('dryH', Number(p[1]), true); });

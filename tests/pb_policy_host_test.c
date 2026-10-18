@@ -611,25 +611,85 @@ static void test_runtime_limits_drive_auto_and_remote_lease(void)
     CHECK(snapshot().fault_latched);
 }
 
-static void test_local_power_limit_expires_off_without_fault(void)
+static void test_manual_shutdown_timer_expires_off_without_fault(void)
 {
     reset_fixture();
     CHECK(pb_policy_set_power_on(
         45.0f, DB_SOURCE_BUTTON, "panel", 1, NULL) == PB_POLICY_OK);
     pb_policy_tick();
-    CHECK(snapshot().heater_output);
-
-    fake_now_us += (int64_t)PB_POLICY_LOCAL_POWER_MAX_MS * 1000 + 1;
-    pb_policy_tick();
     pb_policy_snapshot_t snap = snapshot();
+    CHECK(snap.heater_output);
+    CHECK(snap.manual_timed);
+    CHECK(snap.manual_remaining_s == PB_POLICY_MANUAL_TIMEOUT_DEFAULT * 60U);
+
+    fake_now_us +=
+        (int64_t)PB_POLICY_MANUAL_TIMEOUT_DEFAULT * 60 * 1000000 + 1;
+    pb_policy_tick();
+    snap = snapshot();
     CHECK(snap.mode == PB_MODE_OFF);
     CHECK(snap.source == DB_SOURCE_WATCHDOG);
     CHECK(!snap.fault_latched);
     CHECK(snap.effective_target_c == 0.0f);
+    CHECK(!snap.manual_timed);
 
     CHECK(pb_policy_set_power_on(
         45.0f, DB_SOURCE_BUTTON, "panel", snap.state_revision, NULL)
         == PB_POLICY_OK);
+}
+
+// A live HA/web lease may heartbeat forever, but it cannot extend the absolute
+// manual-session timer. A temperature update is likewise NOT a new session.
+static void test_web_manual_timer_survives_heartbeats_and_target_updates(void)
+{
+    reset_fixture();
+    pb_policy_load_params();
+    CHECK(pb_policy_set_manual_timeout_config(5, false) == PB_POLICY_OK);
+
+    pb_policy_lease_t first, second;
+    CHECK(pb_policy_set_power_on(
+        45.0f, DB_SOURCE_WEB, "ha", PB_POLICY_REVISION_ANY, &first)
+        == PB_POLICY_OK);
+    pb_policy_tick();
+    CHECK(snapshot().manual_remaining_s == 300);
+
+    // Four minutes in, HA is still alive and changes the target. This issues a
+    // fresh lease but MUST preserve the original absolute deadline.
+    fake_now_us += 4LL * 60 * 1000000;
+    CHECK(pb_policy_heartbeat(&first) == PB_POLICY_OK);
+    CHECK(pb_policy_set_power_on(
+        55.0f, DB_SOURCE_WEB, "ha", PB_POLICY_REVISION_ANY, &second)
+        == PB_POLICY_OK);
+    CHECK(strcmp(first.id, second.id) != 0);
+    pb_policy_snapshot_t snap = snapshot();
+    CHECK(snap.manual_timed);
+    CHECK(snap.manual_remaining_s == 60);
+    CHECK(snap.requested_target_c == 55.0f);
+
+    // Changing the saved timer while already heating is NEXT-session config only.
+    CHECK(pb_policy_set_manual_timeout_config(60, true) == PB_POLICY_OK);
+    snap = snapshot();
+    CHECK(snap.manual_remaining_s == 60);              // current deadline unchanged
+    CHECK(snap.params.manual_timeout_min == 60);       // next run will use 60
+
+    // Keep the replacement lease healthy past the original five-minute mark.
+    fake_now_us += 60LL * 1000000 + 1;
+    CHECK(pb_policy_heartbeat(&second) == PB_POLICY_OK);
+    pb_policy_tick();
+    snap = snapshot();
+    CHECK(snap.mode == PB_MODE_OFF);
+    CHECK(!snap.fault_latched);              // normal timer completion, not a safety fault
+    CHECK(!snap.lease_active);
+}
+
+// Personal manual timer intentionally does not cap Klipper automation. Klipper
+// keeps the existing lease/deadman contract so long print jobs are not truncated.
+static void test_klipper_power_on_not_capped_by_personal_manual_timer(void)
+{
+    reset_fixture();
+    pb_policy_lease_t lease;
+    CHECK(pb_policy_set_power_on(
+        45.0f, DB_SOURCE_KLIPPER, "klippy", 1, &lease) == PB_POLICY_OK);
+    CHECK(!snapshot().manual_timed);
 }
 
 static void test_external_fault_sync_off_and_clear(void)
@@ -680,6 +740,8 @@ static void test_params_default_and_load_never_arms(void)
     pb_policy_params_t p;
     pb_policy_get_params(&p);
     CHECK(p.manual_target_c == 50.0f);
+    CHECK(p.manual_timeout_min == PB_POLICY_MANUAL_TIMEOUT_DEFAULT);
+    CHECK(!p.manual_timeout_extended);
     CHECK(p.auto_target_c == 60.0f);
     CHECK(p.auto_bed_threshold_c == 100.0f);
     CHECK(p.dry_target_c == 60.0f);
@@ -704,6 +766,8 @@ static void test_params_clamp_corrupt_values(void)
 {
     reset_fixture();
     CHECK(nvs_set_u32(1, "md_last", 9000) == ESP_OK);      // 90 C -> ceiling 70
+    CHECK(nvs_set_u32(1, "md_man_tmo", 99) == ESP_OK);     // ext off -> clamp 30
+    CHECK(nvs_set_u32(1, "md_man_ext", 0) == ESP_OK);
     CHECK(nvs_set_u32(1, "md_auto_tgt", 100) == ESP_OK);   // 1 C  -> floor 30
     CHECK(nvs_set_u32(1, "md_auto_bed", 50000) == ESP_OK); // 500 C -> 120
     CHECK(nvs_set_u32(1, "md_dry_hrs", 99) == ESP_OK);     // out of range -> 12
@@ -712,6 +776,8 @@ static void test_params_clamp_corrupt_values(void)
     pb_policy_params_t p;
     pb_policy_get_params(&p);
     CHECK(p.manual_target_c == 70.0f);
+    CHECK(p.manual_timeout_min == PB_POLICY_MANUAL_TIMEOUT_NORMAL_MAX);
+    CHECK(!p.manual_timeout_extended);
     CHECK(p.auto_target_c == 30.0f);
     CHECK(p.auto_bed_threshold_c == 120.0f);
     CHECK(p.dry_hours == 12);
@@ -733,6 +799,48 @@ static void test_params_load_respects_runtime_max(void)
     CHECK(p.auto_target_c == 55.0f);
     CHECK(p.dry_target_c == 55.0f);
     CHECK(snapshot().mode == PB_MODE_OFF);
+}
+
+static void test_manual_timeout_config_extension_and_persistence(void)
+{
+    reset_fixture();
+    pb_policy_load_params();
+
+    // Extension is disabled by default. A request above 30 therefore clamps to 30.
+    CHECK(pb_policy_set_manual_timeout_config(33, false) == PB_POLICY_OK);
+    pb_policy_params_t p;
+    pb_policy_get_params(&p);
+    CHECK(p.manual_timeout_min == 30);
+    CHECK(!p.manual_timeout_extended);
+
+    // Explicit opt-in unlocks 31..60, including non-round examples such as 33.
+    CHECK(pb_policy_set_manual_timeout_config(33, true) == PB_POLICY_OK);
+    pb_policy_get_params(&p);
+    CHECK(p.manual_timeout_min == 33);
+    CHECK(p.manual_timeout_extended);
+    CHECK(pb_policy_persist_pending());
+    CHECK(nvs_read("md_man_tmo") == 33);
+    CHECK(nvs_read("md_man_ext") == 1);
+
+    // Even extended mode hard-caps at one hour.
+    CHECK(pb_policy_set_manual_timeout_config(99, true) == PB_POLICY_OK);
+    pb_policy_get_params(&p);
+    CHECK(p.manual_timeout_min == 60);
+    CHECK(pb_policy_persist_pending());
+    CHECK(nvs_read("md_man_tmo") == 60);
+
+    // Reboot retains the user's explicit extension preference and duration.
+    CHECK(pb_policy_init() == ESP_OK);
+    pb_policy_load_params();
+    pb_policy_get_params(&p);
+    CHECK(p.manual_timeout_min == 60);
+    CHECK(p.manual_timeout_extended);
+
+    // Turning extension back off clamps the stored duration to the normal ceiling.
+    CHECK(pb_policy_set_manual_timeout_config(60, false) == PB_POLICY_OK);
+    pb_policy_get_params(&p);
+    CHECK(p.manual_timeout_min == 30);
+    CHECK(!p.manual_timeout_extended);
 }
 
 static void test_params_persist_only_changed_keys(void)
@@ -1202,26 +1310,27 @@ static void test_auto_source_zone_overrides_bed_threshold(void)
 // instead of dropping to idle.
 static void test_manual_override_of_auto_reverts_on_run_end(void)
 {
-    // (a) local timed-run completion reverts to AUTO waiting.
+    // (a) The forgotten-heater timer is a hard OFF even when manual HEAT
+    // temporarily overrode AUTO; it must not re-arm heat through AUTO.
     reset_fixture();
     CHECK(pb_policy_set_auto(60.0f, 100.0f, DB_SOURCE_WEB, 1) == PB_POLICY_OK);
     uint32_t rev = snapshot().state_revision;
+    CHECK(pb_policy_set_manual_timeout_config(5, false) == PB_POLICY_OK);
     CHECK(pb_policy_set_power_on(
         45.0f, DB_SOURCE_BUTTON, "panel", rev, NULL) == PB_POLICY_OK);
     CHECK(snapshot().mode == PB_MODE_POWER_ON);
     pb_policy_tick();
     CHECK(snapshot().heater_output);
 
-    fake_now_us += (int64_t)PB_POLICY_LOCAL_POWER_MAX_MS * 1000 + 1;
+    fake_now_us += 5LL * 60 * 1000000 + 1;
     pb_policy_tick();
     pb_policy_snapshot_t snap = snapshot();
-    CHECK(snap.mode == PB_MODE_AUTO);                 // reverted, not OFF
-    CHECK(!snap.auto_engaged);                        // "waiting"
-    CHECK(snap.auto_bed_threshold_c == 100.0f);       // re-armed from remembered AUTO
+    CHECK(snap.mode == PB_MODE_OFF);                  // hard OFF, not AUTO
     CHECK(!snap.fault_latched);
-    CHECK(snap.effective_target_c == 0.0f);           // waiting applies no heat
+    CHECK(snap.effective_target_c == 0.0f);
 
-    // (b) on-device On-button toggle-off (stop the run) reverts to AUTO waiting.
+    // (b) An explicit on-device ON-button toggle-off is still a user-requested
+    // run end and may revert a one-off override to AUTO waiting.
     reset_fixture();
     pb_policy_load_params();                          // auto=60/bed100
     pb_policy_on_button(PB_BUTTON_AUTO, PB_BUTTON_SHORT);
@@ -1266,7 +1375,7 @@ static void test_manual_from_off_ends_off(void)
     reset_fixture();
     CHECK(pb_policy_set_power_on(
         45.0f, DB_SOURCE_BUTTON, "panel", 1, NULL) == PB_POLICY_OK);
-    fake_now_us += (int64_t)PB_POLICY_LOCAL_POWER_MAX_MS * 1000 + 1;
+    fake_now_us += (int64_t)PB_POLICY_MANUAL_TIMEOUT_DEFAULT * 60 * 1000000 + 1;
     pb_policy_tick();
     CHECK(snapshot().mode == PB_MODE_OFF);
 
@@ -1281,7 +1390,7 @@ static void test_manual_from_off_ends_off(void)
     CHECK(pb_policy_set_power_on(
         45.0f, DB_SOURCE_BUTTON, "panel", snapshot().state_revision, NULL)
         == PB_POLICY_OK);
-    fake_now_us += (int64_t)PB_POLICY_LOCAL_POWER_MAX_MS * 1000 + 1;
+    fake_now_us += (int64_t)PB_POLICY_MANUAL_TIMEOUT_DEFAULT * 60 * 1000000 + 1;
     pb_policy_tick();
     CHECK(snapshot().mode == PB_MODE_OFF);              // not a stale revert to AUTO
 }
@@ -1318,11 +1427,14 @@ int main(void)
     test_filtration_band_runs_outside_auto();
     test_drying_is_bounded_and_expires_off();
     test_runtime_limits_drive_auto_and_remote_lease();
-    test_local_power_limit_expires_off_without_fault();
+    test_manual_shutdown_timer_expires_off_without_fault();
+    test_web_manual_timer_survives_heartbeats_and_target_updates();
+    test_klipper_power_on_not_capped_by_personal_manual_timer();
     test_external_fault_sync_off_and_clear();
     test_fault_clear_requires_current_revision();
     test_panel_leds_track_mode();
     test_params_default_and_load_never_arms();
+    test_manual_timeout_config_extension_and_persistence();
     test_params_clamp_corrupt_values();
     test_params_load_respects_runtime_max();
     test_params_persist_only_changed_keys();

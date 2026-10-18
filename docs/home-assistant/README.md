@@ -15,6 +15,18 @@ Required custom cards used by this dashboard example:
 
 The firmware itself does not depend on these Lovelace cards.
 
+## Manual HEAT shutdown timer
+
+Manual `heat` from Home Assistant uses the same persisted firmware-side manual
+shutdown timer as the DragonBreath web UI (and front-panel ON button). The normal
+range is 5–30 minutes, default 30. An explicit default-off extension can unlock
+values through 60 minutes. Closing the HA app does not stop the device-to-broker
+heartbeat, so this absolute timer is intentionally independent of MQTT health:
+even a perfectly connected HA session cannot keep manual heat alive past the
+configured duration. Changing the HA target during an active run does not restart
+the countdown.
+
+
 ## Screenshots
 
 ### Native climate dashboard card

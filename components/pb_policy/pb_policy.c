@@ -37,6 +37,8 @@ static const char *TAG = "pb_policy";
 // --- Remembered mode parameters (the only reboot-surviving policy state) -----
 #define PB_NVS_NAMESPACE            "app_nvs"
 #define PB_NVS_KEY_MANUAL           "md_last"
+#define PB_NVS_KEY_MAN_TMO          "md_man_tmo"
+#define PB_NVS_KEY_MAN_EXT          "md_man_ext"
 #define PB_NVS_KEY_AUTO_TGT         "md_auto_tgt"
 #define PB_NVS_KEY_AUTO_BED         "md_auto_bed"
 #define PB_NVS_KEY_AUTO_BED_EN      "md_auto_bed_en"
@@ -53,6 +55,8 @@ static const char *TAG = "pb_policy";
 // settings JSON). Stock default is 30 C; the range sits below the AUTO heat-engage
 // threshold (min 40 C) so the band never demands heat.
 #define PB_DEFAULT_MANUAL_TARGET_C  50.0f
+#define PB_DEFAULT_MANUAL_TIMEOUT_MIN PB_POLICY_MANUAL_TIMEOUT_DEFAULT
+#define PB_DEFAULT_MANUAL_EXT       false
 #define PB_DEFAULT_AUTO_TARGET_C    60.0f
 #define PB_DEFAULT_AUTO_BED_C      100.0f
 #define PB_DEFAULT_AUTO_BED_EN     false
@@ -95,7 +99,7 @@ typedef struct {
                                  // the external source is live
 
     int64_t drying_deadline_us;
-    int64_t local_power_deadline_us;
+    int64_t manual_power_deadline_us;
 
     bool lease_active;
     pb_policy_lease_t lease;
@@ -204,7 +208,7 @@ static void set_off_locked(db_source_t source)
     s.requested_target_c = 0.0f;
     s.auto_engaged = false;
     s.drying_deadline_us = 0;
-    s.local_power_deadline_us = 0;
+    s.manual_power_deadline_us = 0;
     s.resume_mode = PB_MODE_OFF;   // #72: explicit/hard OFF never reverts
     lease_invalidate_locked();
     revision_advance_locked(source);
@@ -228,7 +232,7 @@ static void restore_or_off_locked(db_source_t source)
     s.auto_engaged = false;
     s.auto_filtering = false;
     s.drying_deadline_us = 0;
-    s.local_power_deadline_us = 0;
+    s.manual_power_deadline_us = 0;
     s.resume_mode = PB_MODE_OFF;
     lease_invalidate_locked();
     revision_advance_locked(source);
@@ -262,6 +266,13 @@ static void params_clamp(pb_policy_params_t *p)
     p->manual_target_c = clamp_or_default(
         p->manual_target_c, PB_MIN_MODE_TARGET_C,
         max_target_c, PB_DEFAULT_MANUAL_TARGET_C);
+    if (p->manual_timeout_min < PB_POLICY_MANUAL_TIMEOUT_MIN_MIN)
+        p->manual_timeout_min = PB_DEFAULT_MANUAL_TIMEOUT_MIN;
+    uint8_t manual_max = p->manual_timeout_extended
+        ? PB_POLICY_MANUAL_TIMEOUT_EXT_MAX
+        : PB_POLICY_MANUAL_TIMEOUT_NORMAL_MAX;
+    if (p->manual_timeout_min > manual_max)
+        p->manual_timeout_min = manual_max;
     p->auto_target_c = clamp_or_default(
         p->auto_target_c, PB_MIN_MODE_TARGET_C,
         max_target_c, PB_DEFAULT_AUTO_TARGET_C);
@@ -281,6 +292,8 @@ static void params_clamp(pb_policy_params_t *p)
 static void params_defaults_locked(void)
 {
     s.params.manual_target_c      = PB_DEFAULT_MANUAL_TARGET_C;
+    s.params.manual_timeout_min    = PB_DEFAULT_MANUAL_TIMEOUT_MIN;
+    s.params.manual_timeout_extended = PB_DEFAULT_MANUAL_EXT;
     s.params.auto_target_c        = PB_DEFAULT_AUTO_TARGET_C;
     s.params.auto_bed_threshold_c = PB_DEFAULT_AUTO_BED_C;
     s.params.auto_bed_trigger_enable = PB_DEFAULT_AUTO_BED_EN;
@@ -307,6 +320,10 @@ static esp_err_t persist_params(const pb_policy_params_t *p)
     const struct { const char *key; uint32_t val, prev; } kv[] = {
         { PB_NVS_KEY_MANUAL,   c_to_centi(p->manual_target_c),
                                c_to_centi(s_written.manual_target_c) },
+        { PB_NVS_KEY_MAN_TMO,  p->manual_timeout_min,
+                               s_written.manual_timeout_min },
+        { PB_NVS_KEY_MAN_EXT,  p->manual_timeout_extended ? 1u : 0u,
+                               s_written.manual_timeout_extended ? 1u : 0u },
         { PB_NVS_KEY_AUTO_TGT, c_to_centi(p->auto_target_c),
                                c_to_centi(s_written.auto_target_c) },
         { PB_NVS_KEY_AUTO_BED, c_to_centi(p->auto_bed_threshold_c),
@@ -396,6 +413,10 @@ void pb_policy_load_params(void)
         uint32_t v;
         if (nvs_get_u32(h, PB_NVS_KEY_MANUAL, &v) == ESP_OK)
             p.manual_target_c = centi_to_c(v);
+        if (nvs_get_u32(h, PB_NVS_KEY_MAN_TMO, &v) == ESP_OK)
+            p.manual_timeout_min = v > UINT8_MAX ? UINT8_MAX : (uint8_t)v;
+        if (nvs_get_u32(h, PB_NVS_KEY_MAN_EXT, &v) == ESP_OK)
+            p.manual_timeout_extended = (v != 0);
         if (nvs_get_u32(h, PB_NVS_KEY_AUTO_TGT, &v) == ESP_OK)
             p.auto_target_c = centi_to_c(v);
         if (nvs_get_u32(h, PB_NVS_KEY_AUTO_BED, &v) == ESP_OK)
@@ -433,8 +454,10 @@ void pb_policy_load_params(void)
         ESP_LOGE(TAG, "persistence worker did not start; params stay RAM-only");
     }
     ESP_LOGI(TAG,
-        "params loaded: manual=%.1fC auto=%.1fC/bed%.1fC dry=%.1fC/%uh",
-        p.manual_target_c, p.auto_target_c, p.auto_bed_threshold_c,
+        "params loaded: manual=%.1fC/%umin%s auto=%.1fC/bed%.1fC dry=%.1fC/%uh",
+        p.manual_target_c, (unsigned)p.manual_timeout_min,
+        p.manual_timeout_extended ? "+ext" : "",
+        p.auto_target_c, p.auto_bed_threshold_c,
         p.dry_target_c, (unsigned)p.dry_hours);
 }
 
@@ -497,24 +520,45 @@ pb_policy_result_t pb_policy_set_power_on(
     }
 
     int64_t now = esp_timer_get_time();
+    // A repeated POWER_ON while already in manual heat is a target/controller
+    // update, not a new session. Preserve the absolute manual shutdown deadline so
+    // moving a slider cannot silently restart the clock.
+    bool continuing_session =
+        s.mode == PB_MODE_POWER_ON
+        && s.manual_power_deadline_us > now
+        && (source == DB_SOURCE_WEB || source == DB_SOURCE_BUTTON);
+
     // #72: a manual run started while AUTO is a one-off override — remember to
-    // return to AUTO "waiting" when it ends. From any other mode there is nothing
-    // to revert to.
+    // return to AUTO "waiting" when it is explicitly stopped from the ON button.
+    // The absolute WEB/HA timer is a safety stop and always goes hard OFF.
     pb_mode_t prev_mode = s.mode;
+    pb_mode_t prior_resume = s.resume_mode;
+    int64_t prior_deadline = s.manual_power_deadline_us;
     lease_invalidate_locked();
     s.mode = PB_MODE_POWER_ON;
-    s.resume_mode = (prev_mode == PB_MODE_AUTO) ? PB_MODE_AUTO : PB_MODE_OFF;
+    s.resume_mode = continuing_session
+        ? prior_resume
+        : ((prev_mode == PB_MODE_AUTO) ? PB_MODE_AUTO : PB_MODE_OFF);
     s.requested_target_c = pb_heater_get_target_c(); // includes heater clamp
     s.auto_engaged = false;
     s.drying_deadline_us = 0;
-    s.local_power_deadline_us = 0;
+
+    // DragonBreath GUI + Home Assistant originate as DB_SOURCE_WEB; the physical
+    // ON button is DB_SOURCE_BUTTON. Give those human manual sessions an absolute
+    // firmware-side deadline independent of heartbeats. Klipper automation keeps
+    // its existing lease behavior and is not capped by this personal manual timer.
+    if (continuing_session) {
+        s.manual_power_deadline_us = prior_deadline;
+    } else if (source == DB_SOURCE_WEB || source == DB_SOURCE_BUTTON) {
+        s.manual_power_deadline_us =
+            now + (int64_t)s.params.manual_timeout_min * 60 * 1000000;
+    } else {
+        s.manual_power_deadline_us = 0;
+    }
 
     if (source_is_remote(source)) {
         lease_issue_locked(owner, now, lease_out);
         pb_heater_notify_link_alive();
-    } else {
-        s.local_power_deadline_us =
-            now + (int64_t)PB_POLICY_LOCAL_POWER_MAX_MS * 1000;
     }
     revision_advance_locked(source);
     s.params.manual_target_c = s.requested_target_c;   // post-clamp
@@ -552,7 +596,7 @@ pb_policy_result_t pb_policy_set_auto(
     s.auto_engaged = false;
     s.auto_filtering = false;
     s.drying_deadline_us = 0;
-    s.local_power_deadline_us = 0;
+    s.manual_power_deadline_us = 0;
     (void)pb_heater_set_target_c(0.0f);
     revision_advance_locked(source);
     s.params.auto_target_c = s.requested_target_c;     // post-clamp
@@ -600,6 +644,31 @@ pb_policy_result_t pb_policy_set_auto_preheat_config(
     ESP_LOGI(TAG, "AUTO bed preheat config: %s, bed>=%.1fC -> chamber %.1fC",
              enable ? "enabled" : "disabled",
              (double)bed_threshold_c, (double)auto_target_c);
+    return PB_POLICY_OK;
+}
+
+// Persist the forgotten-heater guard without changing operational state.
+pb_policy_result_t pb_policy_set_manual_timeout_config(
+    uint8_t minutes, bool extended)
+{
+    if (!s_lock) return PB_POLICY_INVALID;
+    uint8_t max_minutes = extended
+        ? PB_POLICY_MANUAL_TIMEOUT_EXT_MAX
+        : PB_POLICY_MANUAL_TIMEOUT_NORMAL_MAX;
+    if (minutes < PB_POLICY_MANUAL_TIMEOUT_MIN_MIN)
+        minutes = PB_POLICY_MANUAL_TIMEOUT_MIN_MIN;
+    if (minutes > max_minutes)
+        minutes = max_minutes;
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s.params.manual_timeout_min = minutes;
+    s.params.manual_timeout_extended = extended;
+    s.params_dirty = true;
+    xSemaphoreGive(s_lock);
+    params_notify();
+
+    ESP_LOGI(TAG, "manual timeout config: %u min%s",
+             (unsigned)minutes, extended ? " (extended)" : "");
     return PB_POLICY_OK;
 }
 
@@ -662,7 +731,7 @@ pb_policy_result_t pb_policy_start_drying(
     s.resume_mode = PB_MODE_OFF;   // #72: drying is not resumable; no revert to AUTO
     s.requested_target_c = pb_heater_get_target_c();
     s.auto_engaged = false;
-    s.local_power_deadline_us = 0;
+    s.manual_power_deadline_us = 0;
     s.drying_deadline_us = esp_timer_get_time()
         + (int64_t)hours * 60 * 60 * 1000000;
     revision_advance_locked(source);
@@ -870,7 +939,7 @@ void pb_policy_request_panic_off(db_source_t source, const char *reason)
     s.requested_target_c = 0.0f;
     s.auto_engaged = false;
     s.drying_deadline_us = 0;
-    s.local_power_deadline_us = 0;
+    s.manual_power_deadline_us = 0;
     s.resume_mode = PB_MODE_OFF;   // #72: safety off never reverts
     lease_invalidate_locked();
     revision_advance_locked(source);
@@ -1043,7 +1112,14 @@ void pb_policy_tick(void)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     switch (s.mode) {
         case PB_MODE_POWER_ON:
-            if (s.lease_active && now >= s.lease_deadline_us) {
+            if (s.manual_power_deadline_us > 0
+                    && now >= s.manual_power_deadline_us) {
+                local_limit_expired = true;
+                // Absolute human manual-session timer: hard OFF. Do not restore
+                // AUTO, otherwise an active printer condition could immediately
+                // re-energize heat and defeat the forgotten-heater guard.
+                set_off_locked(DB_SOURCE_WATCHDOG);
+            } else if (s.lease_active && now >= s.lease_deadline_us) {
                 watchdog_trip = true;
                 // The remote controller stopped heartbeating within the comms
                 // deadman, so fail safe. Name the likely cause per source: a web
@@ -1052,15 +1128,12 @@ void pb_policy_tick(void)
                 // common reason a manual web session "drops off." s.source still
                 // holds the controlling source here; the trip overwrites it to
                 // WATCHDOG afterward.
-                watchdog_reason = (s.source == DB_SOURCE_WEB)
-                    ? "Web controller lease expired - browser tab may be backgrounded"
-                    : "controller lease expired";
-            } else if (!s.lease_active && s.local_power_deadline_us > 0
-                       && now >= s.local_power_deadline_us) {
-                local_limit_expired = true;
-                // #72: an on-device timed manual run completing is the run "done" —
-                // revert to AUTO "waiting" if it overrode AUTO, else OFF.
-                restore_or_off_locked(DB_SOURCE_WATCHDOG);
+                if (s.source == DB_SOURCE_WEB && strcmp(s.lease_owner, "ha") == 0)
+                    watchdog_reason = "Home Assistant controller lease expired";
+                else if (s.source == DB_SOURCE_WEB)
+                    watchdog_reason = "Web controller lease expired - browser tab may be backgrounded";
+                else
+                    watchdog_reason = "controller lease expired";
             } else {
                 target = s.requested_target_c;
                 autonomous = !s.lease_active;
@@ -1137,7 +1210,7 @@ void pb_policy_tick(void)
         s.requested_target_c = 0.0f;
         s.auto_engaged = false;
         s.drying_deadline_us = 0;
-        s.local_power_deadline_us = 0;
+        s.manual_power_deadline_us = 0;
         s.resume_mode = PB_MODE_OFF;   // #72: lease/local timeout latches off, no revert
         revision_advance_locked(DB_SOURCE_WATCHDOG);
     }
@@ -1186,7 +1259,7 @@ void pb_policy_tick(void)
         s.requested_target_c = 0.0f;
         s.auto_engaged = false;
         s.drying_deadline_us = 0;
-        s.local_power_deadline_us = 0;
+        s.manual_power_deadline_us = 0;
         s.resume_mode = PB_MODE_OFF;   // #72: fault sync latches off, no revert
         lease_invalidate_locked();
         // Preserve WATCHDOG attribution for a policy-triggered expiry.
@@ -1241,7 +1314,7 @@ void pb_policy_tick(void)
     pb_leds_set(PB_LED_DRY, s.mode == PB_MODE_DRYING ? PB_LED_SOLID : PB_LED_OFF);
 
     if (local_limit_expired)
-        ESP_LOGW(TAG, "local POWER_ON limit expired; mode set OFF");
+        ESP_LOGW(TAG, "manual shutdown timer expired; mode set OFF");
     xSemaphoreGive(s_lock);
 }
 
@@ -1272,6 +1345,12 @@ void pb_policy_get_snapshot(pb_policy_snapshot_t *out)
     out->auto_bed_trigger_enable = s.params.auto_bed_trigger_enable;
     out->auto_bed_trigger_active = s.auto_bed_engaged;
     out->params = s.params;
+    out->manual_timed = s.mode == PB_MODE_POWER_ON
+        && s.manual_power_deadline_us > 0;
+    if (out->manual_timed && s.manual_power_deadline_us > now) {
+        out->manual_remaining_s =
+            (uint32_t)((s.manual_power_deadline_us - now + 999999) / 1000000);
+    }
     out->drying = s.mode == PB_MODE_DRYING;
     if (out->drying && s.drying_deadline_us > now) {
         out->drying_remaining_s =

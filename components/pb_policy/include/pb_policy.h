@@ -20,7 +20,16 @@
 
 // Remote POWER_ON leases follow pb_heater's runtime-configurable comms deadman,
 // so the advertised lease runway and the hardware watchdog cannot disagree.
-#define PB_POLICY_LOCAL_POWER_MAX_MS  (12U * 60U * 60U * 1000U)
+//
+// Personal manual-session guard: human-started manual heat (DragonBreath GUI,
+// Home Assistant sidecar, and the front-panel ON button) has an absolute
+// firmware-side timeout.
+// Default 30 min; the explicit "extended" preference raises only the selectable
+// ceiling to 60 min. The timer is independent of controller heartbeats.
+#define PB_POLICY_MANUAL_TIMEOUT_MIN_MIN      5U
+#define PB_POLICY_MANUAL_TIMEOUT_NORMAL_MAX 30U
+#define PB_POLICY_MANUAL_TIMEOUT_EXT_MAX    60U
+#define PB_POLICY_MANUAL_TIMEOUT_DEFAULT    30U
 
 typedef enum {
     PB_MODE_OFF = 0,
@@ -61,6 +70,8 @@ typedef struct {
 // runtime-configured maximum when loaded.
 typedef struct {
     float manual_target_c;        // last accepted POWER_ON target
+    uint8_t manual_timeout_min;    // human manual-session absolute timeout, minutes
+    bool manual_timeout_extended; // allow selecting >30 min, up to 60; default false
     float auto_target_c;          // last accepted AUTO target
     float auto_bed_threshold_c;   // last accepted AUTO bed threshold
     bool auto_bed_trigger_enable; // optional high-bed-setpoint OR trigger
@@ -103,6 +114,9 @@ typedef struct {
     bool auto_bed_trigger_enable; // persisted optional bed trigger
     bool auto_bed_trigger_active; // live hysteresis latch
     pb_policy_params_t params;
+
+    bool manual_timed;
+    uint32_t manual_remaining_s;
 
     bool drying;
     uint32_t drying_remaining_s;
@@ -192,6 +206,13 @@ bool pb_policy_get_auto_bed_trigger_enable(void);
 // Update the remembered manual HEAT target as configuration only.
 // This does NOT change mode, energize the heater, or create a control lease.
 pb_policy_result_t pb_policy_set_manual_target_config(float target_c);
+
+// Persist the human manual-session timer without starting heat. The extension
+// preference controls whether values above 30 minutes are accepted; a disabled
+// extension clamps any requested value to the normal 30-minute ceiling.
+// Changing this while a session is already running affects the NEXT session only.
+pb_policy_result_t pb_policy_set_manual_timeout_config(
+    uint8_t minutes, bool extended);
 
 // Update printer environment used by AUTO.  This is observer input, not a
 // control command, and therefore never creates or refreshes a control lease.
