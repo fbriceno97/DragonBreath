@@ -4,7 +4,7 @@ DragonBreath consumes its board-neutral services from
 [`justinh-rahb/dragon-core`](https://github.com/justinh-rahb/dragon-core) through
 ESP-IDF Component Manager. The exact revision is pinned for the shared managed
 components in [`main/idf_component.yml`](main/idf_component.yml). This custom fork
-vendors **`dc_ui` locally under `components/dc_ui`** from dragon-core v0.35.2 so
+vendors **`dc_ui` and `dc_wifi` locally under `components/`** from dragon-core v0.35.2 so
 the modified R9 dashboard is reproducible from a clean clone; the remaining shared
 components continue to come from dragon-core through Component Manager.
 
@@ -47,3 +47,8 @@ OpenVent and dragon-core are MIT licensed. The OpenVent attribution remains part
 this provenance record even though the components have moved repositories and their
 symbols have changed. See each upstream repository's `LICENSE` file for the license
 text.
+
+
+## R10 network hardening
+
+R10 additionally vendors `dc_wifi` from dragon-core v0.35.2 so the Panda Breath-specific network fixes are reproducible: runtime station reconnects are paced and indefinite, modem power saving is disabled, and an unset AP mode defaults to FALLBACK. Existing persisted AP settings are preserved.

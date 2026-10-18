@@ -15,10 +15,7 @@ dependencies:
     git: https://github.com/justinh-rahb/dragon-core.git
     path: components/dc_bambu
     version: v0.35.2
-  dc_wifi:
-    git: https://github.com/justinh-rahb/dragon-core.git
-    path: components/dc_wifi
-    version: v0.35.2
+  # dc_wifi is vendored locally under components/dc_wifi in this custom fork.
   dc_moonraker:
     git: https://github.com/justinh-rahb/dragon-core.git
     path: components/dc_moonraker

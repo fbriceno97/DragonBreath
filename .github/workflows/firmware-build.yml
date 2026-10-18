@@ -80,6 +80,9 @@ jobs:
       - name: Test HIL scenario runner
         run: python3 -m unittest tests/test_hil_runner.py
 
+      - name: Check R10 network hardening invariants
+        run: sh tests/check_network_hardening.sh
+
       # E1 static analysis: cppcheck over OUR OWN code (components/ + main/). Fails on
       # any error/warning/performance/portability finding (--error-exitcode). The C
       # `error` checks are always on. False positives cppcheck's parser cannot model
