@@ -35,7 +35,6 @@
 #include "dc_wifi.h"
 #include "dc_moonraker.h"
 #include "dc_source.h"
-#include "pb_peer.h"
 #include "dc_bambu.h"
 #include "dc_prusa.h"
 #include "pb_ha.h"
@@ -551,10 +550,11 @@ void app_main(void)
     // abort/reboot and tear down the safety loop that's already running above.
     if ((e = dc_wifi_start()) != ESP_OK)
         ESP_LOGE(TAG, "dc_wifi_start: %s (continuing; safety loop unaffected)", esp_err_to_name(e));
-    // ESP-NOW peer provider: broadcast our heater capability for consumers (DragonVent).
-    // Advisory only; non-fatal like the rest of network bring-up.
-    if ((e = pb_peer_start()) != ESP_OK)
-        ESP_LOGW(TAG, "pb_peer_start: %s (continuing without peer broadcast)", esp_err_to_name(e));
+    // R10 network hardening: do not start ESP-NOW on DragonBreath. The previous
+    // provider broadcast heater frames every 2 s and descriptors every 6 s on the
+    // same 2.4 GHz radio. It is not required for Bambu/HA control and is disabled
+    // while isolating the ASUS mesh instability.
+    ESP_LOGI(TAG, "network hardening: ESP-NOW peer broadcasting disabled");
     // Control-source selector: start ONLY the bound client. Klipper is the
     // default and the shipped path; Bambu/HA are opt-in. Each is log-and-continue
     // like the rest of network bring-up — a source that fails to init just leaves
