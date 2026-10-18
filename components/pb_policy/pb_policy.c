@@ -647,8 +647,7 @@ pb_policy_result_t pb_policy_set_auto_preheat_config(
     return PB_POLICY_OK;
 }
 
-// PERSONAL_R9_OFF_SETPOINT_ONLY:
-// Store the next manual HEAT setpoint without changing operational state.
+// Persist the forgotten-heater guard without changing operational state.
 pb_policy_result_t pb_policy_set_manual_timeout_config(
     uint8_t minutes, bool extended)
 {
