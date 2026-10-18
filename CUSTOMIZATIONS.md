@@ -120,3 +120,17 @@ The repository's GitHub Actions workflow also builds with ESP-IDF v5.3.5.
 ## Home Assistant
 
 The Home Assistant dashboard configuration is intentionally kept outside the embedded firmware source. Reproducible examples are under `docs/home-assistant/`.
+
+
+## R10 network hardening
+
+After a field incident on an ASUS 2.4 GHz mesh, R10 hardens the networking path without changing heater policy:
+
+- vendors `dc_wifi` from dragon-core v0.35.2 so the fix is pinned in this fork;
+- fixes the post-boot reconnect dead-end: after a runtime deauthentication the station retries indefinitely with a 5-second pacing delay instead of exhausting five retries and remaining offline;
+- disables ESP32 modem power saving on Panda Breath to eliminate inactivity/missed-beacon edge cases;
+- changes the **default** AP lifecycle to FALLBACK (STA-only while healthy), while preserving any explicit stored AP setting such as OFF;
+- disables the optional ESP-NOW Dragon peer broadcaster on DragonBreath so it emits no periodic vendor action-frame broadcasts;
+- logs disconnect reason, channel, startup/runtime phase, and retry state for future diagnosis.
+
+The existing persisted `ap_mode=off` setting remains OFF after the update.
