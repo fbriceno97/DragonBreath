@@ -207,7 +207,7 @@ bool pb_policy_get_auto_bed_trigger_enable(void);
 // This does NOT change mode, energize the heater, or create a control lease.
 pb_policy_result_t pb_policy_set_manual_target_config(float target_c);
 
-// Persist the WEB/HA manual-session timer without starting heat. The extension
+// Persist the human manual-session timer without starting heat. The extension
 // preference controls whether values above 30 minutes are accepted; a disabled
 // extension clamps any requested value to the normal 30-minute ceiling.
 // Changing this while a session is already running affects the NEXT session only.
